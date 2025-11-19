@@ -61,14 +61,14 @@ async fn check(target: &str, resolver: &State<Resolver>,
                geo_ip: &State<Arc<RwLock<GeoIp>>>,
                cdn: &State<Arc<RwLock<CdnList>>>,
                ru_blacklist: &State<Arc<RwLock<RuBlacklist>>>) -> Result<Template, Status> {
-    let parsed = Target::from(target);
-    let ips = match parsed.resolve(resolver).await {
+    let target = Target::from(target);
+    let ips = match target.resolve(resolver).await {
         Ok(ips) => ips,
         Err(e) if e.kind().is_no_records_found() => {
             return Ok(Template::render("empty", context! {
                 global: GlobalContext::new(),
-                target,
-                target_type: parsed.readable_type(),
+                target: target.to_query(),
+                target_type: target.readable_type(),
             }));
         }
         Err(e) => {
@@ -99,7 +99,7 @@ async fn check(target: &str, resolver: &State<Resolver>,
         });
 
     let ru_blacklist = ru_blacklist.read().await;
-    let domain = match &parsed {
+    let domain = match &target {
         Target::Domain(domain) => ru_blacklist.contains_domain(domain),
         _ => None
     };
@@ -117,8 +117,8 @@ async fn check(target: &str, resolver: &State<Resolver>,
         providers,
         domain,
         blocked_subnets,
-        target,
-        target_type: parsed.readable_type(),
+        target: target.to_query(),
+        target_type: target.readable_type(),
         ips,
         geo,
     }))

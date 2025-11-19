@@ -95,7 +95,7 @@ impl RuBlacklist {
         }
     }
 
-    pub fn update<R: BufRead>(&mut self, ip_reader: R, domain_reader: R) -> Result<(), Error>  {
+    pub fn update<R: BufRead>(&mut self, ip_reader: R, domain_reader: R, custom_domains_reader: R) -> Result<(), Error>  {
         let mut ip_trie = IpnetTrie::new();
         for net in ip_reader.lines() {
             let net = net?;
@@ -109,7 +109,7 @@ impl RuBlacklist {
 
         let mut domain_trie = TrieBuilder::new();
         let mut count = 0;
-        for domain in domain_reader.lines() {
+        for domain in domain_reader.lines().chain(custom_domains_reader.lines()) {
             let domain = domain?;
             domain_trie.insert(Self::domain_chunks(&domain), domain);
             count += 1;
@@ -142,16 +142,18 @@ impl RuBlacklist {
 
 #[async_trait]
 impl Updatable for RuBlacklist {
-    type Base = (VecDeque<u8>, VecDeque<u8>);
+    type Base = (VecDeque<u8>, VecDeque<u8>, VecDeque<u8>);
 
     async fn download() -> Result<Self::Base, Error> {
         Ok((VecDeque::from(
             fetch_db(Self::get_url("RKN_NETS", "https://antifilter.download/list/allyouneed.lst")).await?),
             VecDeque::from(
-            fetch_db(Self::get_url("RKN_DOMAINS", "https://antifilter.download/list/domains.lst")).await?)))
+            fetch_db(Self::get_url("RKN_DOMAINS", "https://antifilter.download/list/domains.lst")).await?),
+            VecDeque::from(include_bytes!("../dist-domains.txt").to_vec())
+        ))
     }
 
-    async fn install(&mut self, (nets, domains): Self::Base) -> Result<(), Error> {
-        self.update(nets, domains)
+    async fn install(&mut self, (nets, domains, custom_domains): Self::Base) -> Result<(), Error> {
+        self.update(nets, domains, custom_domains)
     }
 }
