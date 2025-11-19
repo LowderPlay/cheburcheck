@@ -146,7 +146,7 @@ impl Updatable for RuBlacklist {
 
     async fn download() -> Result<Self::Base, Error> {
         Ok((VecDeque::from(
-            fetch_db(Self::get_url("RKN_NETS", "https://antifilter.download/list/allyouneed.lst")).await?),
+            fetch_db(Self::get_url("RKN_NETS", "https://antifilter.network/download/ipsum.lst")).await?),
             VecDeque::from(
             fetch_db(Self::get_url("RKN_DOMAINS", "https://antifilter.download/list/domains.lst")).await?),
             VecDeque::from(include_bytes!("../dist-domains.txt").to_vec())

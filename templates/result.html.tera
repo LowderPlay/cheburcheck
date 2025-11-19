@@ -75,7 +75,7 @@
                     </div>
                 {% endfor %}
                 <div class="detail-row">
-                    <span class="row-label">Статус РКН</span>
+                    <span class="row-label">Реестр РКН</span>
 
                     {% if domain_found or subnet_found %}
                         <span class="row-value alert">ОГРАНИЧЕН</span>
@@ -86,13 +86,13 @@
 
                 {% if domain_found %}
                     <div class="detail-row">
-                        <span class="row-label">Домен</span>
+                        <span class="row-label">Заблокированный домен</span>
                         <span class="row-value">{{ domain }}</span>
                     </div>
                 {% endif %}
                 {% if subnet_found %}
                     <div class="detail-row">
-                        <span class="row-label">Подсети</span>
+                        <span class="row-label">Заблокированные подсети</span>
                         <div>
                             {% for network in blocked_subnets %}
                                 <p class="row-value">{{ network }}</p>

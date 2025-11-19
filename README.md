@@ -31,7 +31,7 @@
 
 ## Списки
 
-Для проверки используются списки [123jjck/cdn-ip-ranges](https://github.com/123jjck/cdn-ip-ranges) и [antifilter.download](https://antifilter.download/).
+Для проверки используются списки [123jjck/cdn-ip-ranges](https://github.com/123jjck/cdn-ip-ranges), [antifilter.download](https://antifilter.download/) и [antifilter.network](https://antifilter.network).
 
 ---
 
