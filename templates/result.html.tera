@@ -1,0 +1,112 @@
+{% extends 'base' %}
+
+{% block content %}
+<div class="result-panel {% if found %}blocked-theme{% else %}clean-theme{% endif %}">
+    <div class="result-header">
+        <div class="icon-box status-icon">
+            {% if found %}
+                <i data-lucide="shield-alert" width="32" height="32"></i>
+            {% else %}
+                <i data-lucide="shield-check" width="32" height="32"></i>
+            {% endif %}
+        </div>
+        {% if found %}
+            <div>
+                <h2>Заблокирован</h2>
+                <p class="subheading text-sm">Ресурс был найден в списках блокировок</p>
+            </div>
+        {% else %}
+            <div>
+                <h2>Доступен</h2>
+                <p class="subheading text-sm">Ограничений не обнаружено</p>
+            </div>
+        {% endif %}
+
+    </div>
+
+    <div class="target-info">
+        <div class="target-info-label">{{ target_type }}:</div>
+        <div class="target-value target-display">{{ target }}</div>
+    </div>
+
+    <div class="details-grid">
+        <div class="detail-section">
+            <h3 class="section-title">Сетевые данные</h3>
+            <div class="detail-row">
+                <span class="row-label">IP-адреса</span>
+                <div>
+                    {% for ip in ips %}
+                        <p class="row-value">{{ ip }}</p>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="detail-row">
+                <span class="row-label">Хостинг / ISP</span>
+                <span class="row-value">{{ geo.organisation }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="row-label">Локация</span>
+                <span class="row-value">{{ geo.location }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="row-label">ASN</span>
+                <span class="row-value">{{ geo.asn }}</span>
+            </div>
+        </div>
+
+        <div class="detail-section">
+            <h3 class="reason-header">Нахождение в списках</h3>
+                <div class="detail-row">
+                    <span class="row-label">CDN</span>
+                    {% if cdn_found %}
+                        <p class="row-value alert">НАЙДЕН</p>
+                    {% else %}
+                        <span class="row-value">Не найден</span>
+                    {% endif %}
+                </div>
+                {% for provider, networks in providers %}
+                    <div class="detail-row">
+                        <span class="row-label">{{ provider }}</span>
+                        <div>
+                            {% for network in networks %}
+                                <p class="row-value">{{ network.cidr }}</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
+                <div class="detail-row">
+                    <span class="row-label">Статус РКН</span>
+
+                    {% if domain_found or subnet_found %}
+                        <span class="row-value alert">ОГРАНИЧЕН</span>
+                    {% else %}
+                        <span class="row-value">Не найден</span>
+                    {% endif %}
+                </div>
+
+                {% if domain_found %}
+                    <div class="detail-row">
+                        <span class="row-label">Домен</span>
+                        <span class="row-value">{{ domain }}</span>
+                    </div>
+                {% endif %}
+                {% if subnet_found %}
+                    <div class="detail-row">
+                        <span class="row-label">Подсети</span>
+                        <div>
+                            {% for network in blocked_subnets %}
+                                <p class="row-value">{{ network }}</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endif %}
+        </div>
+    </div>
+</div>
+
+<a href="/" class="reset-btn">
+    <i data-lucide="rotate-ccw" width="14" height="14"></i>
+    <span>Проверить другой</span>
+</a>
+
+{% endblock content %}

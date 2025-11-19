@@ -1,0 +1,85 @@
+{% extends 'base' %}
+
+{% block content %}
+<div class="result-panel">
+    <div class="result-header">
+        <div class="icon-box status-icon">
+            <i data-lucide="shield-question-mark" width="32" height="32"></i>
+        </div>
+        <div>
+            <h2>Не найдено</h2>
+            <p class="subheading text-sm">Возможно вы неправильно ввели запрос?</p>
+        </div>
+
+    </div>
+
+    <div class="target-info">
+        <div class="target-info-label">{{ target_type }}:</div>
+        <div class="target-value target-display">{{ target }}</div>
+    </div>
+
+{#    <div class="details-grid">#}
+{#        <div class="detail-section">#}
+{#            <h3 class="section-title">Сетевые данные</h3>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">IP-адреса</span>#}
+{#                <div>#}
+{#                    {% for ip in ips %}#}
+{#                        <p class="row-value">{{ ip }}</p>#}
+{#                    {% endfor %}#}
+{#                </div>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Хостинг / ISP</span>#}
+{#                <span class="row-value">{{ geo.organisation }}</span>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Location</span>#}
+{#                <span class="row-value">{{ geo.location }}</span>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">ASN</span>#}
+{#                <span class="row-value">{{ geo.asn }}</span>#}
+{#            </div>#}
+{#        </div>#}
+
+{#        <div class="detail-section">#}
+{#            <h3 class="reason-header">Нахождение в списках</h3>#}
+{#                <div class="detail-row">#}
+{#                    <span class="row-label">CDN</span>#}
+{#                    {% if found %}#}
+{#                        <div>#}
+{#                            {% for net in subnets %}#}
+{#                                <p class="row-value">{{ net }}</p>#}
+{#                            {% endfor %}#}
+{#                        </div>#}
+{#                    {% else %}#}
+{#                        <span class="row-value">Не найден</span>#}
+{#                    {% endif %}#}
+{#                </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Статус РКН</span>#}
+{#                <span class="row-value alert">ОГРАНИЧЕН</span>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Орган</span>#}
+{#                <span class="row-value">Генпрокуратура</span>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Номер решения</span>#}
+{#                <span class="row-value">27-31-2024/Ид4124</span>#}
+{#            </div>#}
+{#            <div class="detail-row">#}
+{#                <span class="row-label">Дата внесения</span>#}
+{#                <span class="row-value">12.11.2024</span>#}
+{#            </div>#}
+{#        </div>#}
+{#    </div>#}
+</div>
+
+<a href="/" class="reset-btn">
+    <i data-lucide="rotate-ccw" width="14" height="14"></i>
+    <span>Проверить другой</span>
+</a>
+
+{% endblock content %}

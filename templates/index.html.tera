@@ -1,0 +1,51 @@
+{% extends 'base' %}
+
+{% block content %}
+<div class="search-container">
+    <h1>Статус Ресурса</h1>
+    <p class="text-muted">Введите домен или IP-адрес для поиска по спискам заблокированных адресов и хостинг-провайдеров.</p>
+</div>
+
+<form class="search-form" action="/check">
+    <input
+            type="text"
+            name="target"
+            placeholder="example.com или 1.1.1.1 или 2606:4700:4700::1001"
+            class="search-input"
+            minlength="3"
+            required
+            autofocus
+    >
+    <div class="search-icon-wrapper">
+        <i data-lucide="search" width="20" height="20"></i>
+    </div>
+    <button type="submit" class="search-btn">
+        <span>Проверить</span>
+        <i data-lucide="chevron-right" width="16" height="16"></i>
+    </button>
+</form>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-card-header">
+            <i data-lucide="globe" width="16" height="16"></i>
+            <span>Количество доменов</span>
+        </div>
+        <span>{{ info.domain_count }}</span>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header">
+            <i data-lucide="server" width="16" height="16"></i>
+            <span>Количество IPv4-адресов</span>
+        </div>
+        <span>{{ info.v4_count }}</span>
+    </div>
+    <div class="stat-card">
+        <div class="stat-card-header">
+            <i data-lucide="activity" width="16" height="16"></i>
+            <span>Последнее обновление</span>
+        </div>
+        <span><script>document.write(new Date("{{ info.last_update }}").toLocaleString())</script></span>
+    </div>
+</div>
+{% endblock content %}

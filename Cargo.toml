@@ -1,0 +1,26 @@
+[package]
+name = "blocklist-check"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hickory-resolver = { version = "0.26.0-alpha.1", features = ["tokio", "webpki-roots", "https-ring"] }
+rocket = "0.5.1"
+rocket_dyn_templates = { version = "0.2.0", features = ["tera"] }
+serde = { version = "1", features = ["derive"] }
+log = "0.4.28"
+maxminddb = "0.26"
+ipnet-trie = "0.3.0"
+ipnet = "2.11.0"
+csv = "1.4.0"
+trie-rs = "0.4.2"
+env_logger = "0.11.8"
+reqwest = { version = "0.12.24", features = ["stream", "rustls-tls-webpki-roots"] }
+chrono = { version = "0.4.42", features = ["serde"] }
+rocket-cache-response = "0.6.4"
+
+[build-dependencies]
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+tar = "0.4"
+flate2 = "1.0"
