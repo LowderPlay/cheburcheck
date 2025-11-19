@@ -22,7 +22,7 @@ FROM docker.io/debian:bookworm-slim
 
 WORKDIR /app
 
-RUN apt update && apt install -y libssl3 ca-certificates
+RUN apt update && apt install -y libssl3 ca-certificates curl
 
 ## copy the main binary
 COPY --from=build /build/main ./
