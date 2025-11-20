@@ -8,6 +8,16 @@
 
     <link rel="stylesheet" href="/main.css"/>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
+    <meta name="description" content="Проверка доменов и IP-адресов на наличие в реестре блокировок Роскомнадзора и заблокированных CDN.">
+    <meta name="keywords" content="проверка домена, заблокирован ли сайт, Роскомнадзор, чебурнет, cdn, блокировки">
+    <meta name="author" content="Cheburcheck">
+    <meta property="og:title" content="Cheburcheck">
+    <meta property="og:description" content="Проверка доменов и IP-адресов на наличие в реестре блокировок Роскомнадзора и заблокированных CDN.">
+    <meta property="og:url" content="https://cheburcheck.ru">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="https://cheburcheck.ru/og-cover.png">
+    <meta property="og:site_name" content="Cheburcheck">
     {% endblock head %}
 </head>
 <body>
