@@ -1,0 +1,18 @@
+{% extends 'base' %}
+{% import 'typography' as typography %}
+
+{% macro metadata(title, description, image="https://cheburcheck.ru/og-cover.png", keywords, url="/") %}
+    <title>{{ title }} - Cheburcheck</title>
+    <meta name="description" content="{{ description }}">
+    <meta name="keywords" content="проверка домена, заблокирован ли сайт, Роскомнадзор, чебурнет, cdn, блокировки, {{ keywords }}">
+    <meta property="og:title" content="{{ title }}">
+    <meta property="og:description" content="{{ description }}">
+    <meta property="og:url" content="https://cheburcheck.ru{{ url }}">
+    <meta property="og:image" content="{{ image }}">
+{% endmacro metadata %}
+
+{% block content %}
+<div class="page-container">
+    {% block page_text %}{% endblock %}
+</div>
+{% endblock content %}

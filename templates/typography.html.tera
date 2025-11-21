@@ -1,0 +1,5 @@
+{% macro heading(title) %}
+    <h2 id="{{ title | slugify }}">
+        <a href="#{{ title | slugify }}">{{ title }}</a>
+    </h2>
+{% endmacro title %}

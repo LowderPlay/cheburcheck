@@ -68,8 +68,6 @@ body {
 .gap-4 { gap: 1rem; }
 .column { flex-direction: column; }
 
-.hidden { display: none !important; }
-
 h1 {
     font-size: 1.5rem;
     text-transform: uppercase;
@@ -135,12 +133,15 @@ h1.error-code {
     text-decoration: none;
 }
 
+.footer, .footer a {
+    color: #525252;
+}
+
 .footer {
     margin-top: 3rem;
     padding-top: 1rem;
     border-top: 1px solid var(--border-color);
     text-align: center;
-    color: #525252;
 }
 
 .search-container {
@@ -190,9 +191,8 @@ h1.error-code {
 }
 
 .search-btn {
-    /* Убрано абсолютное позиционирование */
-    width: 100%; /* Полная ширина на мобильных */
-    height: 4rem; /* Высота совпадает с полем ввода */
+    width: 100%;
+    height: 4rem;
     padding: 0 1.5rem;
     background-color: var(--btn-bg);
     color: var(--btn-text);
@@ -203,7 +203,7 @@ h1.error-code {
     cursor: pointer;
     display: flex;
     align-items: center;
-    justify-content: center; /* Центрируем текст и иконку */
+    justify-content: center;
     gap: 0.5rem;
     font-family: inherit;
     transition: background 0.2s;
@@ -213,7 +213,6 @@ h1.error-code {
     background-color: white;
 }
 
-/* Статистика под поиском */
 .stats-grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -236,18 +235,15 @@ h1.error-code {
     gap: 0.5rem;
 }
 
-/* --- 6. Результаты (Blocked/Clean) --- */
 .result-panel {
     border: 1px solid var(--border-color);
     padding: 1.5rem;
     margin-top: 1rem;
-    /*background-color: rgba(69, 10, 10, 0.1);*/
 }
 
-/* Цветовые схемы для результатов */
 .blocked-theme {
     border-color: var(--red-border);
-    background-color: rgba(69, 10, 10, 0.1); /* Очень прозрачный красный */
+    background-color: rgba(69, 10, 10, 0.1);
 }
 .blocked-theme h2, .blocked-theme .status-icon, .blocked-theme .subheading { color: var(--red-color); }
 .blocked-theme .reason-header { border-bottom: 1px solid var(--red-border); color: #f87171; }
@@ -269,7 +265,6 @@ h1.error-code {
     color: #4ade80;
 }
 
-/* Общие элементы результатов */
 .result-header {
     display: flex;
     gap: 1rem;
@@ -373,28 +368,51 @@ h1.error-code {
     color: white;
 }
 
-/* --- 7. Demo Controls --- */
-.demo-controls {
-    position: fixed;
-    bottom: 1rem;
-    right: 1rem;
-    display: flex;
-    gap: 0.5rem;
-    opacity: 0.3;
-    transition: opacity 0.2s;
+.page-container ul {
+    list-style-position: inside;
 }
-.demo-controls:hover { opacity: 1; }
 
-.demo-btn {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.625rem;
-    text-transform: uppercase;
-    cursor: pointer;
-    border: 1px solid rgba(255,255,255,0.1);
-    font-family: inherit;
+.page-container h1 {
+    font-size: 48px;
+    margin: 1rem 0;
 }
-.demo-btn.block { background-color: #450a0a; color: #fee2e2; border-color: #7f1d1d; }
-.demo-btn.clean { background-color: #052e16; color: #dcfce7; border-color: #14532d; }
+
+.page-container h2 {
+    font-size: 32px;
+    margin: 2.5rem 0 1rem;
+}
+
+.page-container h2 a {
+    text-decoration: none;
+}
+
+.page-container a {
+    color: var(--text-bright);
+}
+
+.page-container h2 a:hover {
+    text-decoration: underline;
+}
+
+.page-container p {
+    text-align: justify;
+    margin: 1rem 0;
+}
+
+.page-container img.fullwidth {
+    width: 100%;
+}
+
+.page-container img {
+    margin: auto;
+    display: block;
+}
+
+.page-container i.caption {
+    display: block;
+    text-align: center;
+}
+
 
 @media (min-width: 640px) {
     body { padding: 2rem; }

@@ -1,0 +1,111 @@
+{% extends 'page' %}
+{% import 'page' as page %}
+
+{% block metadata %}
+    {{ page::metadata(title="Test", description="Проверка", keywords="test", url="/kb/test") }}
+{% endblock metadata %}
+
+{% block page_text %}
+    <img class="fullwidth" src="https://placehold.co/600x400">
+    <h1>Hello, world!</h1>
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+
+    {{ typography::heading(title="Test1") }}
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+
+    <img src="https://placehold.co/600x400">
+    <i class="caption">Centered image</i>
+
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+    {{ typography::heading(title="Test2") }}
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+    {{ typography::heading(title="Test3") }}
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+    {{ typography::heading(title="Test4") }}
+    <p>
+        Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+        Aenean at scelerisque purus. Integer eu justo vel mi consectetur sagittis.
+        Proin aliquam, nulla sit amet ornare interdum, leo orci posuere nulla, convallis consequat nibh ex id felis.
+        Nam dapibus enim mauris, bibendum rutrum orci blandit at.
+        Curabitur sed dui sit amet felis consequat cursus quis at magna.
+        Suspendisse at neque lobortis, pulvinar quam at, posuere lorem.
+        Etiam sed elit vehicula leo tincidunt rhoncus et ut metus.
+        Quisque egestas diam non sem pellentesque bibendum.
+        Fusce posuere pretium nisl sit amet pharetra.
+        Maecenas urna odio, dignissim non efficitur vel, varius eu nulla.
+        Sed convallis id lorem sed suscipit. In hac habitasse platea dictumst.
+        Nulla fermentum arcu urna, vitae gravida leo accumsan ut. Phasellus accumsan hendrerit erat,
+        nec imperdiet odio ullamcorper sed.
+    </p>
+
+{% endblock page_text %}

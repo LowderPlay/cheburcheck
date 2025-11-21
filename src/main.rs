@@ -16,7 +16,7 @@ use rocket::fs::FileServer;
 use rocket::http::Status;
 use rocket::{tokio, Request, State};
 use rocket::response::content::RawJavaScript;
-use rocket_dyn_templates::{context, Template};
+use rocket_dyn_templates::{context, Metadata, Template};
 use serde::Serialize;
 use log::error;
 use rocket::tokio::sync::{watch, RwLock};
@@ -45,6 +45,18 @@ fn index(info: &State<watch::Receiver<UpdateInfo>>) -> Template {
         global: GlobalContext::new(),
         info: &*info.borrow(),
     })
+}
+
+#[get("/kb/<page>")]
+fn page(metadata: Metadata, page: &str) -> Option<Template> {
+    let page = format!("pages/{}", page);
+    if !metadata.contains_template(&page) {
+        return None;
+    }
+
+    Some(Template::render(page, context! {
+        global: GlobalContext::new(),
+    }))
 }
 
 #[get("/healthcheck")]
@@ -196,7 +208,7 @@ async fn rocket() -> _ {
         .manage(rkn_list)
         .manage(geo_ip)
         .manage(rx)
-        .mount("/", routes![index, lucide, check, healthcheck])
+        .mount("/", routes![index, lucide, check, healthcheck, page])
         .register("/", catchers![default])
         .mount("/", FileServer::from(PathBuf::from("static")))
         .attach(Template::fairing())
