@@ -58,39 +58,41 @@
             <h3 class="reason-header">Нахождение в списках</h3>
                 <div class="detail-row">
                     <span class="row-label">CDN</span>
-                    {% if cdn_found %}
+                    {% if providers %}
                         <p class="row-value alert">НАЙДЕН</p>
                     {% else %}
                         <span class="row-value">Не найден</span>
                     {% endif %}
                 </div>
-                {% for provider, networks in providers %}
-                    <div class="detail-row">
-                        <span class="row-label">{{ provider }}</span>
-                        <div>
-                            {% for network in networks %}
-                                <p class="row-value">{{ network.cidr }}</p>
-                            {% endfor %}
+                {% if providers %}
+                    {% for provider, networks in providers %}
+                        <div class="detail-row">
+                            <span class="row-label">{{ provider }}</span>
+                            <div>
+                                {% for network in networks %}
+                                    <p class="row-value">{{ network.cidr }}</p>
+                                {% endfor %}
+                            </div>
                         </div>
-                    </div>
-                {% endfor %}
+                    {% endfor %}
+                {% endif %}
                 <div class="detail-row">
                     <span class="row-label">Реестр РКН</span>
 
-                    {% if domain_found or subnet_found %}
+                    {% if domain or blocked_subnets %}
                         <span class="row-value alert">ОГРАНИЧЕН</span>
                     {% else %}
                         <span class="row-value">Не найден</span>
                     {% endif %}
                 </div>
 
-                {% if domain_found %}
+                {% if domain %}
                     <div class="detail-row">
                         <span class="row-label">Заблокированный домен</span>
                         <span class="row-value">{{ domain }}</span>
                     </div>
                 {% endif %}
-                {% if subnet_found %}
+                {% if blocked_subnets %}
                     <div class="detail-row">
                         <span class="row-label">Заблокированные подсети</span>
                         <div>

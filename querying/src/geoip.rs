@@ -1,9 +1,10 @@
 use std::{io};
 use std::io::Error;
 use std::net::IpAddr;
+use async_trait::async_trait;
 use maxminddb::{geoip2, MaxMindDbError};
 use maxminddb::geoip2::{city, country, City, Country};
-use rocket::serde::Serialize;
+use serde::Serialize;
 use crate::updater::{fetch_db, Updatable};
 
 pub struct GeoIp {
@@ -84,14 +85,14 @@ impl GeoIp {
 impl Updatable for GeoIp {
     type Base = (Vec<u8>, Vec<u8>, Vec<u8>);
 
-    async fn download() -> Result<Self::Base, io::Error> {
-        Ok((fetch_db(Self::get_url("GEO_ASN", "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb")).await?,
-            fetch_db(Self::get_url("GEO_COUNTRY", "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb")).await?,
-            fetch_db(Self::get_url("GEO_CITY", "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb")).await?))
+    async fn download() -> Result<Self::Base, Error> {
+        Ok((fetch_db(Self::get_url("GEO_ASN", "https://git.io/GeoLite2-ASN.mmdb")).await?,
+            fetch_db(Self::get_url("GEO_COUNTRY", "https://git.io/GeoLite2-Country.mmdb")).await?,
+            fetch_db(Self::get_url("GEO_CITY", "https://git.io/GeoLite2-City.mmdb")).await?))
     }
 
     async fn install(&mut self, (asn, country, city): Self::Base) -> Result<(), Error> {
         self.update(asn, country, city)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(|e| Error::new(io::ErrorKind::Other, e))
     }
 }

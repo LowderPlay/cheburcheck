@@ -1,10 +1,19 @@
+use std::io::{Error, ErrorKind};
 use std::net::IpAddr;
 use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::{TokioConnectionProvider};
-use hickory_resolver::proto::ProtoError;
+use thiserror::Error;
 
 pub struct Resolver {
     resolver: hickory_resolver::Resolver<TokioConnectionProvider>,
+}
+
+#[derive(Error, Debug)]
+pub enum ResolveError {
+    #[error("domain not found")]
+    NxDomain,
+    #[error("resolver error")]
+    Other(#[from] Error),
 }
 
 impl Resolver {
@@ -18,8 +27,13 @@ impl Resolver {
         Resolver { resolver }
     }
 
-    pub async fn lookup_ips(&self, domain: &str) -> Result<Vec<IpAddr>, ProtoError> {
-        Ok(self.resolver.lookup_ip(domain).await?
+    pub async fn lookup_ips(&self, domain: &str) -> Result<Vec<IpAddr>, ResolveError> {
+        Ok(self.resolver.lookup_ip(domain).await
+            .map_err(|e| if e.kind.is_no_records_found() {
+                ResolveError::NxDomain
+            } else {
+                ResolveError::Other(Error::new(ErrorKind::Other, e))
+            })?
             .into_iter().collect())
     }
 }

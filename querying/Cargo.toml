@@ -1,0 +1,22 @@
+[package]
+name = "querying"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ipnet-trie = "0.3.0"
+ipnet = "2.11.0"
+serde = { version = "1", features = ["derive"] }
+async-trait = "0.1.89"
+trie-rs = "0.4.2"
+tokio = { workspace = true }
+reqwest = { workspace = true }
+csv = "1.4.0"
+maxminddb = "0.26.0"
+log = { workspace = true }
+hickory-resolver = { version = "0.26.0-alpha.1", features = ["tokio", "webpki-roots", "https-ring"] }
+thiserror = "2.0.17"
+url = "2.5.7"
+indicatif = "0.18.3"
+chrono = { version = "0.4.42", features = ["serde"] }
+futures-util = "0.3.31"

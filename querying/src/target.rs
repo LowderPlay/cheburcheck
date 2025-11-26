@@ -1,8 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use hickory_resolver::proto::ProtoError;
 use url::Url;
-use crate::resolver::Resolver;
+use crate::resolver::{ResolveError, Resolver};
 
+#[derive(Debug, Clone)]
 pub enum Target {
     Domain(String),
     Ipv4(Ipv4Addr),
@@ -37,7 +37,7 @@ impl Target {
         }
     }
 
-    pub async fn resolve(&self, resolver: &Resolver) -> Result<Vec<IpAddr>, ProtoError> {
+    pub async fn resolve(&self, resolver: &Resolver) -> Result<Vec<IpAddr>, ResolveError> {
         Ok(match self {
             Target::Domain(domain) => resolver.lookup_ips(domain).await?,
             Target::Ipv4(ipv4) => vec![IpAddr::V4(ipv4.clone())],

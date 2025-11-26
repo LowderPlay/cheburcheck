@@ -31,21 +31,21 @@
             <i data-lucide="globe" width="16" height="16"></i>
             <span>Количество доменов</span>
         </div>
-        <span>{{ info.domain_count }}</span>
+        <span>{{ domain_count }}</span>
     </div>
     <div class="stat-card">
         <div class="stat-card-header">
             <i data-lucide="server" width="16" height="16"></i>
             <span>Количество IPv4-адресов</span>
         </div>
-        <span>{{ info.v4_count }}</span>
+        <span>{{ v4_count }}</span>
     </div>
     <div class="stat-card">
         <div class="stat-card-header">
             <i data-lucide="activity" width="16" height="16"></i>
             <span>Последнее обновление</span>
         </div>
-        <span><script>document.write(new Date("{{ info.last_update }}").toLocaleString())</script></span>
+        <span><script>document.write(new Date("{{ last_update }}").toLocaleString())</script></span>
     </div>
 </div>
 {% endblock content %}

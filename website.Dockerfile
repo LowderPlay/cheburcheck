@@ -1,8 +1,5 @@
 FROM docker.io/rust:1-slim-bookworm AS build
 
-## cargo package name: customize here or provide via --build-arg
-ARG pkg=blocklist-check
-
 WORKDIR /build
 
 COPY . .
@@ -13,8 +10,8 @@ RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     set -eux; \
-    cargo build --release; \
-    objcopy --compress-debug-sections target/release/$pkg ./main
+    cargo build --release --package website; \
+    objcopy --compress-debug-sections target/release/website ./main
 
 ################################################################################
 
@@ -27,8 +24,8 @@ RUN apt update && apt install -y libssl3 ca-certificates curl
 ## copy the main binary
 COPY --from=build /build/main ./
 
-COPY --from=build /build/static ./static
-COPY --from=build /build/templates ./templates
+COPY --from=build /build/website/static ./static
+COPY --from=build /build/website/templates ./templates
 
 ## ensure the container listens globally on port 8080
 ENV ROCKET_ADDRESS=0.0.0.0
