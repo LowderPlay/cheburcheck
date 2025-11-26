@@ -1,4 +1,4 @@
-# ![Cheburcheck Logo](static/favicon.svg) Cheburcheck.ru
+# ![Cheburcheck Logo](website/static/favicon.svg) Cheburcheck.ru
 
 [Cheburcheck.ru](https://cheburcheck.ru) — open-source сервис для проверки доменов и IP-адресов на наличие в списках блокировок Роскомнадзора и популярных заблокированных CDN-провайдеров.
 
