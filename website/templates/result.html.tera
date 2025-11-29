@@ -108,9 +108,5 @@
     </div>
 </div>
 
-<a href="/" class="reset-btn">
-    <i data-lucide="rotate-ccw" width="14" height="14"></i>
-    <span>Проверить другой</span>
-</a>
 
 {% endblock content %}
