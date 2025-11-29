@@ -1,6 +1,8 @@
 {% extends 'base' %}
 
 {% block content %}
+{% include 'search-form' %}
+
 <div class="result-panel">
     <div class="result-header">
         <div class="icon-box status-icon">
