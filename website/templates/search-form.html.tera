@@ -1,0 +1,18 @@
+<form class="search-form" action="/check">
+    <input
+            type="text"
+            name="target"
+            placeholder="example.com или 1.1.1.1 или 2606:4700:4700::1001"
+            class="search-input"
+            minlength="3"
+            required
+            autofocus
+    >
+    <div class="search-icon-wrapper">
+        <i data-lucide="search" width="20" height="20"></i>
+    </div>
+    <button type="submit" class="search-btn">
+        <span>Проверить</span>
+        <i data-lucide="chevron-right" width="16" height="16"></i>
+    </button>
+</form>
