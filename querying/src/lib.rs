@@ -1,16 +1,17 @@
-use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
-use std::sync::Arc;
-use chrono::{DateTime, Utc};
-use ipnet::IpNet;
-use log::error;
-use thiserror::Error;
-use tokio::sync::{watch, RwLock};
 use crate::geoip::{GeoIp, IpInfo};
 use crate::lists::{CdnList, NetworkRecord, RuBlacklist};
 use crate::resolver::{ResolveError, Resolver};
 use crate::target::Target;
 use crate::updater::Updatable;
+use chrono::{DateTime, Utc};
+use ipnet::IpNet;
+use log::error;
+use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
+use std::sync::Arc;
+use maxminddb::MaxMindDbError;
+use thiserror::Error;
+use tokio::sync::{watch, RwLock};
 
 pub mod geoip;
 pub mod lists;
@@ -64,6 +65,10 @@ impl Checker {
             geo_ip: Arc::new(RwLock::new(GeoIp::new())),
             resolver: Resolver::new().await,
         }
+    }
+
+    pub async fn geo_ip(&self, ip: IpAddr) -> Result<IpInfo, MaxMindDbError> {
+        self.geo_ip.read().await.lookup(ip)
     }
 
     pub async fn check(&self, target: Target) -> Result<Check, CheckError> {

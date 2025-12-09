@@ -1,7 +1,7 @@
+use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
+use hickory_resolver::name_server::TokioConnectionProvider;
 use std::io::{Error, ErrorKind};
 use std::net::IpAddr;
-use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
-use hickory_resolver::name_server::{TokioConnectionProvider};
 use thiserror::Error;
 
 pub struct Resolver {

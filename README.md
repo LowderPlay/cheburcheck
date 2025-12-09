@@ -33,14 +33,16 @@
 
 Для проверки используются списки [123jjck/cdn-ip-ranges](https://github.com/123jjck/cdn-ip-ranges), [antifilter.download](https://antifilter.download/) и [antifilter.network](https://antifilter.network).
 
+Мы собираем собственные белые списки с помощью [Cheburcheck Reporter](reporter/README.md).
+
 ---
 
 ## Структура проекта
 
-* `src/` — исходный код приложения
-* `templates/` — Tera-шаблоны для фронтенда
-* `static/` — статические файлы
-* `Cargo.toml` — зависимости и конфигурация Rust-проекта
+* `querying` — модуль проверки сайтов по базам данных
+* `reporter` — [Cheburcheck Reporter](reporter/README.md)
+* `reports` — общий протокол для отправки отчетов
+* `website` — исходный код веб-сайта
 
 ---
 

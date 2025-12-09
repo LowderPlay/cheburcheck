@@ -1,0 +1,93 @@
+{% extends 'page' %}
+{% import 'page' as page %}
+{% import 'histogram' as histogram %}
+
+{% block head %}
+    {{ super() }}
+    {{ histogram::head() }}
+{% endblock head %}
+
+{% block metadata %}
+    {{ page::metadata(title="Белые списки", description="Анализ данных из белых списков блокировок", keywords="белые списки, whitelist", url="/kb/whitelist") }}
+{% endblock metadata %}
+
+{% block page_text %}
+    <h1>Белые списки доменов</h1>
+    <p>
+        Российские операторы связи начали применять новый тип блокировок CDN,
+        при котором загрузка контента обрывается после передачи примерно 16–20 килобайт данных,
+        из‑за чего большинство сайтов на Cloudflare и других зарубежных платформах становятся
+        практически неработоспособными для пользователей в России.
+        Одновременно сохраняются и развиваются белые списки с популярными и «социально значимыми» доменами,
+        которые старательно выводятся из‑под подобных ограничений.
+    </p>
+    <p>
+        Суть схемы в том, что соединение технически устанавливается, первые килобайты HTML,
+        CSS или скриптов передаются, но затем трафик режется или соединение принудительно сбрасывается на уровне
+        российских операторов, обычно после примерно 16 килобайт (10–14 пакетов в зависимости от протокола).
+        Этого объёма достаточно, чтобы страница начала загружаться и создавалась иллюзия доступности,
+        но ключевые части сайта (основной HTML, JS‑бандлы, стили, API‑запросы) не проходят, и сервис фактически
+        перестаёт работать.
+    </p>
+    <pre class="code">$ curl -k https://cheburcheck.ru/100MB.bin -o/dev/null -r 0-65536 --resolve cheburcheck.ru:443:5.78.7.195 --max-time 5
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+ 24 65537   24 16101    0     0   3220      0  0:00:20  0:00:04  0:00:16     0
+curl: (28) Operation timed out after 5000 milliseconds with 16101 out of 65537 bytes received</pre>
+    <p>
+        Определение домена и выбор, «разрешить или задушить» запрос, в текущей схеме делается на связке DPI‑фильтров.
+        По умолчанию, все HTTP(s) запросы на адреса из подсетей хостеров блокируются. Однако, запросы
+        к некоторым доменам из тех же подсетей проходят нормально &mdash; они обнаруживаются по открытому расширению
+        TLS SNI, либо по заголовку Host (в случае с plain http).
+    </p>
+    <p>
+        Проверить нахождение домена в белом списке можно с помощью простого HTTPS-запроса с подменой SNI на адрес из
+        заблокированных диапазонов:
+    </p>
+    <pre class="code">$ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.78.7.195
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 65537  100 65537    0     0  55226      0  0:00:01  0:00:01 --:--:-- 55258</pre>
+    <p>
+        Также, стоит отметить, что домены белого списка добавляются с маской по поддоменам:
+    </p>
+    <pre class="code">$ curl -k https://cheburcheck.ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve cheburcheck.ok.ru:443:
+5.78.7.195
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+100 65537  100 65537    0     0  53192      0  0:00:01  0:00:01 --:--:-- 53195</pre>
+
+    {{ typography::heading(title="Автоматическое сканирование") }}
+    <p>
+        Используя методы, указанные выше, мы разработали инструмент для автоматического сканирования и анализа
+        блокировок
+        <b><a href="https://github.com/LowderPlay/cheburcheck/tree/master/reporter">Cheburcheck Reporter</a></b>.
+        Он позволяет сканировать большое количество доменов
+        за короткий срок за счет параллелизации запросов.
+    </p>
+    <p>
+        Исходя из анализа 1,000,000 доменов из рейтинга
+        <a href="https://tranco-list.eu/list/2NPQ9">Tranco list от 26 ноября 2025</a>,
+        в белом списке содержится около 1000 доменов. Все* домены из списка входят в топ-100,000 рейтинга.
+    </p>
+    <i>
+        * &mdash; Мы не включаем в это число домены из зоны .co.uk, так как по какой-то причине, они все находятся в белом списке.
+    </i>
+
+    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге</i>
+    {{ histogram::histogram(endpoint="/whitelist/histogram") }}
+    <br>
+    <i class="caption">Гистограмма без учета доменов .co.uk</i>
+    {{ histogram::histogram(id="filtered", endpoint="/whitelist/histogram?filter") }}
+
+    {{ typography::heading(title="Скачать списки") }}
+    <p>
+        Мы публикуем результаты наших сканирований в виде CSV-файлов:
+    </p>
+    <div>
+        <i data-lucide="file-symlink" width="16" height="16"></i> <a href="/whitelist/full.csv">Полный список (CSV)</a>
+    </div>
+    <div>
+        <i data-lucide="file-symlink" width="16" height="16"></i> <a href="/whitelist/domains.csv">Только домены (CSV)</a>
+    </div>
+{% endblock page_text %}

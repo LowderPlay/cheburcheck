@@ -1,11 +1,11 @@
-use std::{io};
+use crate::updater::{fetch_db, Updatable};
+use async_trait::async_trait;
+use maxminddb::geoip2::{city, country, City, Country};
+use maxminddb::{geoip2, MaxMindDbError};
+use serde::Serialize;
 use std::io::Error;
 use std::net::IpAddr;
-use async_trait::async_trait;
-use maxminddb::{geoip2, MaxMindDbError};
-use maxminddb::geoip2::{city, country, City, Country};
-use serde::Serialize;
-use crate::updater::{fetch_db, Updatable};
+use std::io;
 
 pub struct GeoIp {
     asn: Option<maxminddb::Reader<Vec<u8>>>,
@@ -15,16 +15,20 @@ pub struct GeoIp {
 
 #[derive(Serialize, Debug)]
 pub struct IpInfo {
-    asn: String,
-    organisation: String,
+    pub asn: Option<String>,
+    pub country_code: Option<String>,
+    pub organisation: Option<String>,
+    pub city_geo_name_id: Option<u32>,
     location: String,
 }
 
 impl Default for IpInfo {
     fn default() -> IpInfo {
         IpInfo {
-            asn: "-".to_string(),
-            organisation: "-".to_string(),
+            asn: None,
+            country_code: None,
+            organisation: None,
+            city_geo_name_id: None,
             location: "-".to_string(),
         }
     }
@@ -57,6 +61,18 @@ impl GeoIp {
             db.lookup::<Country>(ip)?
         } else { None };
 
+        let country_code = country.as_ref().map(|c| c.country.as_ref()
+                .map(|c| c.iso_code
+                    .map(|c| c.to_string()))
+                .flatten())
+            .flatten();
+
+        let city_geo_name_id = city.as_ref()
+            .map(|c| c.city.as_ref()
+                .map(|c| c.geoname_id)
+                .flatten())
+            .flatten();
+
         let location = match (city, country) {
             (Some(City { city: Some(city::City { names: Some(city), .. }),
                       country: Some(country::Country { names: Some(country), .. }), .. }), _) => {
@@ -72,11 +88,12 @@ impl GeoIp {
 
         Ok(IpInfo {
             location,
+            country_code,
+            city_geo_name_id,
             asn: asn.clone().and_then(|asn| asn.autonomous_system_number)
-                .map(|asn| format!("AS{}", asn))
-                .unwrap_or("-".to_string()),
+                .map(|asn| format!("AS{}", asn)),
             organisation: asn.and_then(|asn| asn.autonomous_system_organization)
-                .unwrap_or("-").to_string(),
+                .map(|org| org.to_string()),
         })
     }
 }

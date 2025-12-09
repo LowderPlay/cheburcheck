@@ -9,7 +9,9 @@ RUN apt update && apt install -y libssl-dev pkg-config
 RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=secret,id=DATABASE_URL \
     set -eux; \
+    export DATABASE_URL=$(cat /run/secrets/DATABASE_URL); \
     cargo build --release --package website; \
     objcopy --compress-debug-sections target/release/website ./main
 

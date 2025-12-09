@@ -1,0 +1,137 @@
+{% macro head() %}
+    <script src="/vendor/chart.js"></script>
+    <script src="/vendor/chartjs-plugin-datalabels.js"></script>
+{% endmacro %}
+
+{% macro histogram(id="histogram",
+                    endpoint="/whitelist/histogram",
+                    data_label="Количество ресурсов",
+                    x_label="Ранг домена",
+                    y_label="Количество ресурсов") %}
+    <canvas id="{{ id }}"></canvas>
+
+    <style>
+        #{{ id }} {
+            max-height: 480px;
+        }
+    </style>
+
+    <script>
+        (async function () {
+            function formatNumber(num) {
+                return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+            }
+            const TEXT_LIGHT = '#d4d4d4';
+            const RED_ACCENT = '#ef4444';
+            const AXIS_COLOR = '#404040';
+            const GRID_COLOR = 'rgba(64, 64, 64, 0.2)';
+
+            const ctx = document.getElementById('{{ id }}').getContext('2d');
+            const response = await fetch("{{ endpoint | safe }}");
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+
+            const labels = data.map(item =>
+                `${formatNumber(Math.round(item.bin_min_rank))}-${formatNumber(Math.round(item.bin_max_rank))}`
+            );
+            const counts = data.map(item => item.count);
+
+            Chart.register(ChartDataLabels);
+
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '{{ data_label }}',
+                        data: counts,
+                        backgroundColor: RED_ACCENT,
+                        borderColor: RED_ACCENT,
+                        borderWidth: 1,
+                        borderRadius: 6,
+                        hoverBackgroundColor: `${RED_ACCENT}cc`,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        datalabels: {
+                            anchor: 'end',
+                            align: 'top',
+                            offset: 8,
+                            color: TEXT_LIGHT,
+                            font: {
+                                weight: 'bold',
+                                size: 10
+                            },
+                            formatter: (value) => value > 0 ? formatNumber(value) : '',
+                        },
+                        legend: {
+                            display: false,
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += formatNumber(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            },
+                            backgroundColor: 'rgba(30, 30, 30, 0.9)',
+                            titleColor: TEXT_LIGHT,
+                            bodyColor: TEXT_LIGHT,
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: '{{ x_label }}',
+                                color: TEXT_LIGHT
+                            },
+                            ticks: {
+                                color: TEXT_LIGHT,
+                                maxRotation: 45,
+                                minRotation: 45
+                            },
+                            grid: {
+                                color: GRID_COLOR,
+                                drawBorder: false
+                            },
+                            border: {
+                                color: AXIS_COLOR
+                            }
+                        },
+                        y: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: '{{ y_label }}',
+                                color: TEXT_LIGHT
+                            },
+                            ticks: {
+                                color: TEXT_LIGHT,
+                                callback: () => ''
+                            },
+                            grid: {
+                                color: GRID_COLOR,
+                                drawBorder: false
+                            },
+                            border: {
+                                color: AXIS_COLOR
+                            }
+                        }
+                    }
+                }
+            });
+        })();
+    </script>
+{% endmacro metadata %}

@@ -1,6 +1,6 @@
+use crate::resolver::{ResolveError, Resolver};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use url::Url;
-use crate::resolver::{ResolveError, Resolver};
 
 #[derive(Debug, Clone)]
 pub enum Target {

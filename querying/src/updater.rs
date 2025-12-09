@@ -1,11 +1,11 @@
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
+use log::info;
+use reqwest::IntoUrl;
 use std::fmt::Display;
 use std::io;
 use std::io::Error;
-use async_trait::async_trait;
-use indicatif::{ProgressBar, ProgressStyle};
-use futures_util::StreamExt;
-use log::info;
-use reqwest::IntoUrl;
 
 pub async fn fetch_db<T: IntoUrl + Display>(url: T) -> Result<Vec<u8>, Error> {
     info!("Fetching {}", url);

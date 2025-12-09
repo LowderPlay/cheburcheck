@@ -3,16 +3,27 @@
 {% block content %}
 {% include 'search-form' %}
 
-<div class="result-panel {% if found %}blocked-theme{% else %}clean-theme{% endif %}">
+{% set warning = whitelist and not domain %}
+
+<div class="result-panel {% if warning %}whitelist-theme{% elif found %}blocked-theme{% else %}clean-theme{% endif %}">
     <div class="result-header">
         <div class="icon-box status-icon">
-            {% if found %}
+            {% if whitelist %}
                 <i data-lucide="shield-alert" width="32" height="32"></i>
+            {% elif blocked %}
+                <i data-lucide="shield-x" width="32" height="32"></i>
             {% else %}
                 <i data-lucide="shield-check" width="32" height="32"></i>
             {% endif %}
         </div>
-        {% if found %}
+        {% if warning %}
+            <div>
+                <h2>Белый список</h2>
+                <p class="subheading text-sm">
+                    Ресурс находится в белом списке
+                </p>
+            </div>
+        {% elif found %}
             <div>
                 <h2>Заблокирован</h2>
                 <p class="subheading text-sm">Ресурс был найден в списках блокировок</p>
@@ -44,7 +55,7 @@
             </div>
             <div class="detail-row">
                 <span class="row-label">Хостинг / ISP</span>
-                <span class="row-value">{{ geo.organisation }}</span>
+                <span class="row-value">{% if geo.organisation %}{{ geo.organisation }}{% else %}-{% endif %}</span>
             </div>
             <div class="detail-row">
                 <span class="row-label">Локация</span>
@@ -52,7 +63,7 @@
             </div>
             <div class="detail-row">
                 <span class="row-label">ASN</span>
-                <span class="row-value">{{ geo.asn }}</span>
+                <span class="row-value">{% if geo.asn %}{{ geo.asn }}{% else %}-{% endif %}</span>
             </div>
         </div>
 
@@ -78,6 +89,21 @@
                         </div>
                     {% endfor %}
                 {% endif %}
+
+                {% if whitelist %}
+                    <div class="detail-row">
+                        <a href="/kb/whitelist" class="row-label">Белый список (?)</a>
+                        <span class="row-value success">
+                                НАЙДЕН - <span class="hint"
+                                               title="Дата последнего сканирования, когда данный домен был найден в белом списке">
+                                    <script>
+                                        document.write(new Date("{{ whitelist.last_ok }}").toLocaleDateString());
+                                    </script>
+                                </span>
+                            </span>
+                    </div>
+                {% endif %}
+
                 <div class="detail-row">
                     <span class="row-label">Реестр РКН</span>
 
@@ -106,7 +132,36 @@
                 {% endif %}
         </div>
     </div>
+    <div class="user-feedback-section">
+        <p class="feedback-prompt">У вас работает этот ресурс?</p>
+        <div class="feedback-buttons">
+            <button class="feedback-btn feedback-works" onclick="sendFeedback(true)">
+                <i data-lucide="thumbs-up" width="16" height="16"></i>
+                Работает
+            </button>
+            <button class="feedback-btn feedback-not-works" onclick="sendFeedback(false)">
+                <i data-lucide="thumbs-down" width="16" height="16"></i>
+                Не работает
+            </button>
+        </div>
+        <div class="feedback-status hidden">
+            <i data-lucide="thumbs-up" width="16" height="16"></i>
+            <span>Спасибо за ваш отзыв!</span>
+        </div>
+    </div>
 </div>
+
+<script>
+    function sendFeedback(works) {
+        document.querySelector('.feedback-buttons').classList.add('hidden');
+        document.querySelector('.feedback-prompt').classList.add('hidden');
+        document.querySelector('.feedback-status').classList.remove('hidden');
+
+        fetch(`/feedback/{{ id }}/${works}`, {
+            method: 'POST',
+        });
+    }
+</script>
 
 
 {% endblock content %}

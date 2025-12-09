@@ -1,16 +1,21 @@
 [package]
 name = "website"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-rocket = "0.5.1"
+rocket = { version = "0.5.1", features = ["msgpack", "json"] }
+rocket_db_pools = { version = "0.2.0", features = ["sqlx_postgres"]}
 rocket_dyn_templates = { version = "0.2.0", features = ["tera"] }
-serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "migrate", "chrono", "uuid"] }
+rocket-client-addr = "0.5.4"
+serde = { workspace = true }
+reports = { path = "../reports" }
 querying = { path = "../querying" }
 env_logger = "0.11.8"
 rocket-cache-response = "0.6.4"
 log = { workspace = true }
+dotenvy = { version = "0.15.7" }
 
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json"] }

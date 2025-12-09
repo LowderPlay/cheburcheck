@@ -1,15 +1,15 @@
-use std::collections::VecDeque;
-use std::io;
-use std::io::{BufRead, Error, Read};
-use std::net::IpAddr;
-use std::str::FromStr;
+use crate::updater::{fetch_db, Updatable};
 use async_trait::async_trait;
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
 use log::info;
 use serde::{de, Deserialize, Deserializer, Serializer};
+use std::collections::VecDeque;
+use std::io;
+use std::io::{BufRead, Error, Read};
+use std::net::IpAddr;
+use std::str::FromStr;
 use trie_rs::map::{Trie, TrieBuilder};
-use crate::updater::{fetch_db, Updatable};
 
 pub struct CdnList {
     trie: IpnetTrie<NetworkRecord>,
