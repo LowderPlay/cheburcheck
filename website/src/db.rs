@@ -127,6 +127,9 @@ pub async fn check_whitelist(
     domain: &str,
     db: &mut Connection<Db>,
 ) -> Result<Option<WhitelistedEntry>, sqlx::Error> {
+    if domain.chars().filter(|c| *c == '.').count() > 4 {
+        return Ok(None);
+    }
     sqlx::query_as!(
         WhitelistedEntry,
         "SELECT *

@@ -107,8 +107,13 @@
                 <div class="detail-row">
                     <span class="row-label">Реестр РКН</span>
 
-                    {% if domain or blocked_subnets %}
+                    {% if domain %}
                         <span class="row-value alert">ОГРАНИЧЕН</span>
+                    {% elif blocked_subnets %}
+                        <span class="row-value alert hint"
+                              title="Адреса пересекаются с подсетями заблокированных доменов (не гарантирует блокировку)">
+                            IP-АДРЕСА
+                        </span>
                     {% else %}
                         <span class="row-value">Не найден</span>
                     {% endif %}

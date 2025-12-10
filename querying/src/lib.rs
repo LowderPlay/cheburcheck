@@ -32,13 +32,13 @@ pub struct Check {
     pub verdict: CheckVerdict,
     pub geo: IpInfo,
     pub ips: Vec<IpAddr>,
+    pub rkn_subnets: HashSet<IpNet>,
 }
 
 pub enum CheckVerdict {
     Clear,
     Blocked {
         rkn_domain: Option<String>,
-        rkn_subnets: HashSet<IpNet>,
         cdn_provider_subnets: HashMap<String, HashSet<NetworkRecord>>,
     },
 }
@@ -115,14 +115,14 @@ impl Checker {
             .collect();
 
         Ok(Check {
-            verdict: match (domain, cdn_provider_subnets.is_empty(), rkn_subnets.is_empty()) {
-                (None, true, true) => CheckVerdict::Clear,
-                (domain, _, _) => CheckVerdict::Blocked {
+            verdict: match (domain, cdn_provider_subnets.is_empty()) {
+                (None, true) => CheckVerdict::Clear,
+                (domain, _) => CheckVerdict::Blocked {
                     rkn_domain: domain,
-                    rkn_subnets,
                     cdn_provider_subnets,
-                }
+                },
             },
+            rkn_subnets,
             geo,
             ips
         })

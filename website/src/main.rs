@@ -135,6 +135,7 @@ async fn check(
             verdict: CheckVerdict::Clear,
             geo,
             ips,
+            rkn_subnets,
         }) => Ok(Template::render(
             "result",
             context! {
@@ -143,6 +144,9 @@ async fn check(
                 found: false,
                 target: target.to_query(),
                 target_type: target.readable_type(),
+                blocked_subnets: rkn_subnets.iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>(),
                 whitelist,
                 ips,
                 geo,
@@ -152,10 +156,10 @@ async fn check(
             verdict:
                 CheckVerdict::Blocked {
                     rkn_domain,
-                    rkn_subnets,
                     cdn_provider_subnets,
                 },
             geo,
+            rkn_subnets,
             ips,
         }) => Ok(Template::render(
             "result",
