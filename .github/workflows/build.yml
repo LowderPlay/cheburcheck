@@ -25,17 +25,11 @@ jobs:
       - name: Build Debian package
         run: cargo deb -- --bin cheburchecker
 
-      - name: Find deb file
-        id: find_deb_amd64
-        run: |
-           FILE=$(ls target/debian/*.deb | head -n 1)
-           echo "file=$FILE" >> "$GITHUB_OUTPUT"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-amd64-deb
-          path: ${{ steps.find_deb_amd64.outputs.file }}
+          path: target/debian/*.deb
           compression-level: 0
 
   linux-arm64:
@@ -61,17 +55,11 @@ jobs:
       - name: Create Debian archive
         run: cargo deb --target aarch64-unknown-linux-gnu --no-strip --no-build -- --bin cheburchecker
 
-      - name: Find deb file
-        id: find_deb_arm64
-        run: |
-          FILE=$(ls target/aarch64-unknown-linux-gnu/debian/*.deb | head -n 1)
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-deb
-          path: ${{ steps.find_deb_arm64.outputs.file }}
+          path: target/aarch64-unknown-linux-gnu/debian/*.deb
 
   windows:
     name: Windows amd64
@@ -85,14 +73,8 @@ jobs:
       - name: Build release binary
         run: cargo build --release --bin cheburchecker
 
-      - name: Find exe
-        id: find_exe
-        run: |
-          $file = Get-ChildItem -Path "target/release" -Filter *.exe | Select-Object -First 1
-          echo "file=$($file.FullName)" >> $env:GITHUB_OUTPUT
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-amd64-exe
-          path: ${{ steps.find_exe.outputs.file }}
+          path: target/release/*.exe
