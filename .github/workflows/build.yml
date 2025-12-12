@@ -56,6 +56,7 @@ jobs:
           command: build
           target: "aarch64-unknown-linux-gnu"
           args: "--release --bin cheburchecker"
+          strip: true
 
       - name: Create Debian archive
         run: cargo deb --target aarch64-unknown-linux-gnu --no-build -- --bin cheburchecker
