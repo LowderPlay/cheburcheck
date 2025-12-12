@@ -2,4 +2,4 @@
 template_dir = "website/templates/"
 
 [global.limits]
-msgpack = 5242880
+msgpack = 33554432
