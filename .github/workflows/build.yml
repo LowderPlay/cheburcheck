@@ -59,7 +59,7 @@ jobs:
           strip: true
 
       - name: Create Debian archive
-        run: cargo deb --target aarch64-unknown-linux-gnu --no-build -- --bin cheburchecker
+        run: cargo deb --target aarch64-unknown-linux-gnu --no-strip --no-build -- --bin cheburchecker
 
       - name: Find deb file
         id: find_deb_arm64
