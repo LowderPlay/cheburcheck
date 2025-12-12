@@ -23,6 +23,7 @@ WORKDIR /app
 
 RUN apt update && apt install -y libssl3 ca-certificates curl
 
+COPY --from=build /build/website/Rocket.toml ./
 ## copy the main binary
 COPY --from=build /build/main ./
 

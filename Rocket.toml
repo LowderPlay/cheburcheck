@@ -1,5 +1,0 @@
-[default]
-template_dir = "website/templates/"
-
-[global.limits]
-msgpack = 33554432

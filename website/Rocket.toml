@@ -1,0 +1,5 @@
+[default]
+template_dir = "templates/"
+
+[global.limits]
+msgpack = "32 MiB"
