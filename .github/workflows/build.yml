@@ -58,7 +58,7 @@ jobs:
           args: "--release --bin cheburchecker"
 
       - name: Create Debian archive
-        run: cargo deb --target aarch64-unknown-linux-gnu --no-build --bin cheburchecker
+        run: cargo deb --target aarch64-unknown-linux-gnu --no-build -- --bin cheburchecker
 
       - name: Find deb file
         id: find_deb_arm64
@@ -87,8 +87,8 @@ jobs:
       - name: Find exe
         id: find_exe
         run: |
-          FILE=$(ls target/release/*.exe | head -n 1)
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          $file = Get-ChildItem -Path "target/release" -Filter *.exe | Select-Object -First 1
+          echo "file=$($file.FullName)" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
