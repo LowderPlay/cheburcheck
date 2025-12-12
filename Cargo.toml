@@ -9,6 +9,6 @@ resolver = "3"
 
 [workspace.dependencies]
 tokio = { version = "1.48.0", features = ["full"] }
-reqwest = { version = "0.12.24", features = ["stream", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["stream", "rustls-tls-webpki-roots"] }
 log = "0.4.28"
 serde = { version = "1", features = ["derive"] }

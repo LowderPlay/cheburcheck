@@ -1,11 +1,21 @@
 [package]
 name = "reporter"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
+license-file = "../LICENSE"
+description = "DPI probe: checks blockage of domains by SNI"
+
+[[bin]]
+name = "cheburchecker"
+path = "src/main.rs"
+
+[package.metadata.deb]
+name = "cheburchecker"
+maintainer = "Lowder <me@lowderplay.dev>"
 
 [dependencies]
 tokio = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, default-features = false }
 log = { workspace = true }
 reports = { path = "../reports" }
 anyhow = "1.0"
@@ -21,5 +31,5 @@ serde = { version = "1.0.228", features = ["derive"] }
 libc = "0.2.177"
 
 [build-dependencies]
-reqwest = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["blocking"] }
 getrandom = "0.3.4"

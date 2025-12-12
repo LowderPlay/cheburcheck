@@ -24,6 +24,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use rocket::serde::json::Json;
 use sqlx::types::Uuid;
 
 #[derive(rocket_db_pools::Database)]
@@ -198,6 +199,17 @@ fn default(status: Status, _req: &Request) -> Template {
     )
 }
 
+#[derive(Debug, Serialize)]
+struct JsonError {
+    code: u16,
+    info: String,
+}
+
+#[catch(default)]
+fn api_error(status: Status, _: &Request) -> Json<JsonError> {
+    Json(JsonError { code: status.code, info: status.reason_lossy().to_string() })
+}
+
 #[rocket::get("/lucide.js")]
 fn lucide() -> CacheResponse<RawJavaScript<&'static [u8]>> {
     CacheResponse::Public {
@@ -288,6 +300,7 @@ async fn rocket() -> _ {
         .mount("/vendor", routes![lucide, chartjs, chartjs_datalabels])
         .mount("/agency", routes![agency::upload_report])
         .mount("/whitelist", routes![whitelist::histogram, whitelist::export_csv])
+        .register("/agency", catchers![api_error])
         .register("/", catchers![default])
         .mount("/", FileServer::from(PathBuf::from("static")))
         .attach(Template::fairing())

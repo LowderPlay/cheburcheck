@@ -13,7 +13,6 @@ use reqwest::redirect::Policy;
 use reqwest::Client;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fmt::Display;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,7 +84,7 @@ struct Args {
 
     /// Custom agency endpoint address
     #[arg(short, long = "endpoint", default_value_t = option_env!("AGENCY_ENDPOINT")
-                                            .unwrap_or("https://cheburcheck.ru/agency/upload")
+                                            .unwrap_or("https://cheburcheck.ru/agency/report")
                                             .to_string())]
     agency_endpoint: String,
 
@@ -220,8 +219,6 @@ async fn upload_results(args: &Args, api_client: &Client, results: HashMap<Strin
 
     let uploaded = uploaded.send().await?;
 
-    // let uploaded = uploaded.error_for_status()?;
-
     if uploaded.status().is_success() {
         info!("Uploaded ({})!", uploaded.status().to_string());
     } else {
@@ -283,12 +280,23 @@ async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Err
         };
         return match resp {
             Ok((status, bytes)) => {
-                if !status.is_success() {
-                    warn!("Domain {target} returned non-OK code: {status}");
+                let warn = if !status.is_success() {
+                    Some(format!("Domain {target} returned non-OK code: {status}"))
+                } else if bytes.len() < 65535 {
+                    Some(format!("Domain {target} completed with {} bytes: \n{}", bytes.len(), String::from_utf8_lossy(bytes.as_ref())))
+                } else {
+                    None
+                };
+
+                if let Some(warn) = warn {
+                    warn!("{warn}");
+                    if attempts < args.retry_count {
+                        continue;
+                    } else {
+                        return Ok(Verdict::Blocked { early: false });
+                    }
                 }
-                if bytes.len() < 65535 {
-                    warn!("Domain {target} completed with {} bytes: \n{}", bytes.len(), String::from_utf8_lossy(bytes.as_ref()));
-                }
+
                 Ok(Verdict::Accepted)
             }
             Err((e, early)) => {
