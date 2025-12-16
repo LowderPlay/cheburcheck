@@ -68,17 +68,17 @@ curl: (28) Operation timed out after 5000 milliseconds with 16101 out of 65537 b
     <p>
         Исходя из анализа 1,000,000 доменов из рейтинга
         <a href="https://tranco-list.eu/list/2NPQ9">Tranco list от 26 ноября 2025</a>,
-        в белом списке содержится около 1000 доменов. Все* домены из списка входят в топ-100,000 рейтинга.
+        в белом списке содержится около 1000 доменов.
     </p>
     <i>
         * &mdash; Мы не включаем в это число домены из зоны .co.uk, так как по какой-то причине, они все находятся в белом списке.
     </i>
 
-    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге</i>
-    {{ histogram::histogram(endpoint="/whitelist/histogram") }}
+    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге (топ-30k, без .co.uk)</i>
+    {{ histogram::histogram(endpoint="/whitelist/histogram?filter&limit=30000") }}
     <br>
-    <i class="caption">Гистограмма без учета доменов .co.uk</i>
-    {{ histogram::histogram(id="filtered", endpoint="/whitelist/histogram?filter") }}
+    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге (топ-1kk, без .co.uk)</i>
+    {{ histogram::histogram(id="filtered", endpoint="/whitelist/histogram?limit=1000000") }}
 
     {{ typography::heading(title="Скачать списки") }}
     <p>

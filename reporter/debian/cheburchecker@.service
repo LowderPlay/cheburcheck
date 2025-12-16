@@ -1,0 +1,12 @@
+[Unit]
+Description=Cheburchecker blocklist checker (count: %i)
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/bin/sh -c '/usr/bin/cheburchecker --count %i /var/log/cheburchecker/report-%i.csv'
+EnvironmentFile=-/etc/default/cheburchecker
+ExecStartPre=/bin/mkdir -p /var/log/cheburchecker
+User=root
+Group=root
+LimitNOFILE=16384

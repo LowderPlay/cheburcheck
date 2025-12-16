@@ -1,6 +1,6 @@
 [package]
 name = "reporter"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license-file = "../LICENSE"
 description = "DPI probe: checks blockage of domains by SNI"
@@ -12,6 +12,12 @@ path = "src/main.rs"
 [package.metadata.deb]
 name = "cheburchecker"
 maintainer = "Lowder <me@lowderplay.dev>"
+maintainer-scripts = "debian/"
+systemd-units = [
+    { unit-name = "cheburchecker", enable = false, start = false },
+    { unit-name = "cheburchecker.100k" },
+    { unit-name = "cheburchecker.1kk" },
+]
 
 [dependencies]
 tokio = { workspace = true }

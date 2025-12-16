@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Cheburchecker for 1M domains
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=cheburchecker@1000000.service
+
+[Install]
+WantedBy=timers.target

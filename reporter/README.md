@@ -1,4 +1,5 @@
 # Cheburcheck Reporter
+[![Build Rust Application](https://github.com/LowderPlay/cheburcheck/actions/workflows/build.yml/badge.svg)](https://github.com/LowderPlay/cheburcheck/actions/workflows/build.yml)
 
 Инструмент для автоматического сканирования и анализа блокировок.
 Позволяет сканировать большое количество доменов за короткий срок за счет параллелизации запросов.
@@ -27,16 +28,14 @@ cargo run
 Для этого достаточно запустить его:
 
 1. Сохранить результаты в CSV
-
-```shell
-cheburchecker output.csv
-```
+    ```shell
+    cheburchecker output.csv
+    ```
 
 2. Отправить результаты в **Cheburcheck Agency**
-
-```shell
-cheburchecker -k <API-ключ>
-```
+    ```shell
+    cheburchecker -k <API-ключ>
+    ```
 
 > Для того чтобы получить API-ключ, 
 > обратитесь по адресу [agency@cheburcheck.ru](mailto:agency@cheburcheck.ru). 
@@ -59,3 +58,47 @@ cheburchecker -k <API-ключ>
 | `-P, --path <PATH>`                 | Путь к файлу на сервере                                                                 | 100MB.bin                            |
 | `-a, --endpoint <AGENCY_ENDPOINT>`  | Адрес сервера, на который будут загружены результаты сканирования                       | https://cheburcheck.ru/agency/report |
 | `-k, --key <KEY>`                   | API-ключ                                                                                |                                      |
+
+## Автоматическое сканирование по расписанию (Systemd)
+
+Для автоматического и регулярного запуска чекера на Debian-based системах, вы можете использовать systemd таймеры. Этот проект поставляется с преднастроенными systemd юнитами, которые автоматически устанавливаются с помощью `cargo-deb`.
+
+### Установка
+
+1.  **Установка пакета:**
+    При установке автоматически будут размещены systemd юниты и включены таймеры.
+    ```shell
+    sudo apt install cheburchecker_*.deb
+    ```
+
+2.  **Настройка API-ключа (обязательно):**
+    Чекер отправляет результаты в Cheburcheck Agency. Для этого требуется API-ключ. Его необходимо сохранить в файле `/etc/default/cheburchecker`.
+    ```bash
+    echo "AGENCY_KEY=ВАШ_API_КЛЮЧ" | sudo tee /etc/default/cheburchecker
+    ```
+    Замените `ВАШ_API_КЛЮЧ` на ваш реальный ключ.
+
+### Расписание задач
+
+Предусмотрено два автоматических расписания:
+
+*   **`cheburchecker.100k.timer`**: Запускает проверку **100,000 доменов** каждые 6 часов (в 06:00, 12:00, 18:00 UTC).
+*   **`cheburchecker.1kk.timer`**: Запускает проверку **1,000,000 доменов** ежедневно (в 00:00 UTC).
+
+Таймеры настроены таким образом, чтобы не конфликтовать друг с другом.
+
+### Проверка статуса и логов
+
+Вы можете проверить статус таймеров и служб, а также просмотреть их логи:
+
+*   **Статус таймеров:**
+    ```bash
+    systemctl status cheburchecker.100k.timer
+    systemctl status cheburchecker.1kk.timer
+    ```
+*   **Логи служб:**
+    ```bash
+    journalctl -u cheburchecker@100000.service
+    journalctl -u cheburchecker@1000000.service
+    ```
+    Отчеты сохраняются в `/var/log/cheburchecker/` с именем файла, включающим количество доменов (например, `report-100000.csv`).

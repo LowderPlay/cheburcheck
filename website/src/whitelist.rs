@@ -58,8 +58,9 @@ pub async fn export_csv(
     })
 }
 
-#[get("/histogram?<filter>")]
-pub async fn histogram(mut db: Connection<Db>, filter: Option<bool>) -> Result<Json<Vec<WhitelistHistogramBin>>, Status> {
-    Ok(Json(collect_histogram(&mut db, 50, 100_000, filter.is_some()).await
+#[get("/histogram?<filter>&<limit>")]
+pub async fn histogram(mut db: Connection<Db>, filter: Option<bool>, limit: Option<i32>) -> Result<Json<Vec<WhitelistHistogramBin>>, Status> {
+    let limit = limit.unwrap_or(100_000).clamp(0, 1_000_000);
+    Ok(Json(collect_histogram(&mut db, 50, limit, filter.is_some()).await
         .map_err(|e| Status::InternalServerError)?))
 }

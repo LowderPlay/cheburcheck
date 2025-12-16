@@ -2559,7 +2559,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "reporter"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -4225,7 +4225,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "dotenvy",
  "env_logger",
