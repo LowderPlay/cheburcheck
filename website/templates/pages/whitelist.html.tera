@@ -77,7 +77,7 @@ curl: (28) Operation timed out after 5000 milliseconds with 16101 out of 65537 b
     <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге (топ-30k, без .co.uk)</i>
     {{ histogram::histogram(endpoint="/whitelist/histogram?filter&limit=30000") }}
     <br>
-    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге (топ-1kk, без .co.uk)</i>
+    <i class="caption">Гистограмма количества доменов относительно их положения в рейтинге (топ-1kk, включая .co.uk)</i>
     {{ histogram::histogram(id="filtered", endpoint="/whitelist/histogram?limit=1000000") }}
 
     {{ typography::heading(title="Скачать списки") }}
