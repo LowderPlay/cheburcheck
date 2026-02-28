@@ -49,7 +49,7 @@
         никак не комментировалась официально и не публиковались в Реестре. Аналогичная ситуация с
         <a href="https://ria.ru/20241219/putin-1990168675.html">YouTube</a>, информация о
         блокировке которого, не добавлена в Реестр &mdash; для таких случаев мы создали
-        <a href="https://github.com/LowderPlay/cheburcheck/blob/master/dist-domains.txt">свой список</a> подобных сайтов.
+        <a href="https://github.com/LowderPlay/cheburcheck/blob/master/querying/dist-domains.txt">свой список</a> подобных сайтов.
         Однако, список не исчерпывающий, поэтому
         <a href="https://github.com/LowderPlay/cheburcheck/pulls">принимаются правки</a>.
     </p>
