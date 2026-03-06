@@ -15,7 +15,7 @@ csv = "1.4.0"
 maxminddb = "0.26.0"
 log = { workspace = true }
 hickory-resolver = { version = "0.26.0-alpha.1", features = ["tokio", "webpki-roots", "https-ring"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 url = "2.5.7"
 indicatif = "0.18.3"
 chrono = { version = "0.4.42", features = ["serde"] }
