@@ -7,7 +7,7 @@ edition = "2024"
 rocket = { version = "0.5.1", features = ["msgpack", "json"] }
 rocket_db_pools = { version = "0.2.0", features = ["sqlx_postgres"]}
 rocket_dyn_templates = { version = "0.2.0", features = ["tera"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "migrate", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate", "chrono", "uuid"] }
 rocket-client-addr = "0.5.4"
 serde = { workspace = true }
 reports = { path = "../reports" }
