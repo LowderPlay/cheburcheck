@@ -14,7 +14,7 @@ updates:
       - "dependencies"
       - "rust"
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
     pull-request-branch-name:
       separator: "/"
