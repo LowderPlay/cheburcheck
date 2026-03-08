@@ -14,7 +14,7 @@ jobs:
     name: Linux amd64 (.deb)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -26,7 +26,7 @@ jobs:
         run: cargo deb -- --bin cheburchecker
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-amd64-deb
           path: target/debian/*.deb
@@ -36,7 +36,7 @@ jobs:
     name: Linux arm64 (.deb via cross)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -56,7 +56,7 @@ jobs:
         run: cargo deb --target aarch64-unknown-linux-gnu --no-strip --no-build -- --bin cheburchecker
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-arm64-deb
           path: target/aarch64-unknown-linux-gnu/debian/*.deb
@@ -65,7 +65,7 @@ jobs:
     name: Windows amd64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,7 +74,7 @@ jobs:
         run: cargo build --release --bin cheburchecker
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-amd64-exe
           path: target/release/*.exe
