@@ -29,6 +29,7 @@ RUN apk add --no-cache \
     openssl-libs-static \
     pkgconf \
     musl-dev \
+    build-base \
     && rm -rf /var/cache/apk/*
 
 RUN set -eux; \
@@ -74,9 +75,10 @@ WORKDIR /app
 COPY --from=build --chown=nonroot:nonroot \
     /build/main \
     /build/website/Rocket.toml \
-    /build/website/static \
-    /build/website/templates \
     ./
+
+COPY --from=build /build/website/static ./static
+COPY --from=build /build/website/templates ./templates
 
 ENV ROCKET_ADDRESS=::
 ENV ROCKET_PORT=8080
