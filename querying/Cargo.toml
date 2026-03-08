@@ -17,7 +17,7 @@ log = { workspace = true }
 hickory-resolver = { version = "0.26.0-alpha.1", features = ["tokio", "webpki-roots", "https-ring"] }
 thiserror = "2.0.18"
 url = "2.5.8"
-indicatif = "0.18.3"
+indicatif = "0.18.4"
 chrono = { version = "0.4.42", features = ["serde"] }
 futures-util = "0.3.32"
 serde_json = "1.0"
