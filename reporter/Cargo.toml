@@ -25,7 +25,7 @@ reqwest = { workspace = true, default-features = false }
 log = { workspace = true }
 reports = { path = "../reports" }
 anyhow = "1.0"
-env_logger = "0.11.9"
+env_logger = "0.11.10"
 futures = "0.3"
 clap = { version = "4.6.0", features = ["derive", "env"] }
 csv = "1.4.0"
