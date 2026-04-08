@@ -58,38 +58,37 @@ impl GeoIp {
 
     pub fn lookup(&self, ip: IpAddr) -> Result<IpInfo, MaxMindDbError> {
         let asn = if let Some(db) = &self.asn {
-            db.lookup::<geoip2::Asn>(ip)?
+            db.lookup(ip)?.decode::<geoip2::Asn>()?
         } else { None };
         let city = if let Some(db) = &self.city {
-            db.lookup::<City>(ip)?
+            db.lookup(ip)?.decode::<City>()?
         } else { None };
         let country = if let Some(db) = &self.country {
-            db.lookup::<Country>(ip)?
+            db.lookup(ip)?.decode::<Country>()?
         } else { None };
 
-        let country_code = country.as_ref().map(|c| c.country.as_ref()
-                .map(|c| c.iso_code
-                    .map(|c| c.to_string()))
-                .flatten())
-            .flatten();
+        let country_code = country.as_ref()
+            .map(|c| c.country.iso_code)
+            .flatten()
+            .map(|c| c.to_string());
 
         let city_geo_name_id = city.as_ref()
-            .map(|c| c.city.as_ref()
-                .map(|c| c.geoname_id)
-                .flatten())
+            .map(|c| c.city.geoname_id)
             .flatten();
 
-        let location = match (city, country) {
-            (Some(City { city: Some(city::City { names: Some(city), .. }),
-                      country: Some(country::Country { names: Some(country), .. }), .. }), _) => {
-                let city = city.get("ru").unwrap_or(&"-");
-                let country = country.get("ru").unwrap_or(&"-");
-                format!("{}, {}", city, country)
-            }
-            (_, Some(Country { country: Some(country::Country { names: Some(country), .. }), .. })) => {
-                country.get("ru").unwrap_or(&"-").to_string()
-            }
-            (_, _) => "-".to_string(),
+        let mut location = (None, None);
+        if let Some(city) = city {
+            location.0 = city.city.names.russian.or(city.city.names.english);
+        }
+        if let Some(country) = country {
+            location.1 = country.country.names.russian.or(country.country.names.english);
+        }
+
+        let location = match location {
+            (Some(city), Some(country)) => format!("{}, {}", city, country),
+            (Some(city), None) => city.to_string(),
+            (None, Some(country)) => country.to_string(),
+            (None, None) => "-".to_string(),
         };
 
         Ok(IpInfo {
