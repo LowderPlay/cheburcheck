@@ -6,7 +6,6 @@ mod whitelist;
 
 use crate::db::{check_whitelist, save_query, WhitelistedEntry};
 use log::{error, info, warn, LevelFilter};
-use querying::resolver::Resolver;
 use querying::target::Target;
 use querying::{Check, CheckError, CheckVerdict, Checker};
 use rocket::fairing::AdHoc;
@@ -315,7 +314,6 @@ async fn rocket() -> _ {
         .expect("Failed to create database pool");
 
     rocket::build()
-        .manage(Resolver::new().await)
         .manage(checker)
         .manage(pool)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
