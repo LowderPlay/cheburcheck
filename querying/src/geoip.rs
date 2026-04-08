@@ -1,6 +1,6 @@
 use crate::updater::{fetch_db, Updatable};
 use async_trait::async_trait;
-use maxminddb::geoip2::{city, country, City, Country};
+use maxminddb::geoip2::{City, Country};
 use maxminddb::{geoip2, MaxMindDbError};
 use serde::Serialize;
 use std::io::Error;
