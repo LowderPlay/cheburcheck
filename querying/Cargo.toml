@@ -14,7 +14,7 @@ reqwest = { workspace = true }
 csv = "1.4.0"
 maxminddb = "0.27.3"
 log = { workspace = true }
-hickory-resolver = { version = "0.26.0-alpha.1", features = ["tokio", "webpki-roots", "https-ring"] }
+hickory-resolver = { version = "0.26.0-beta.3", features = ["tokio", "webpki-roots", "https-ring"] }
 thiserror = "2.0.18"
 url = "2.5.8"
 indicatif = "0.18.4"
