@@ -12,7 +12,11 @@ let {
 } = $props();
 
 const title = $derived(
-	theme === "whitelist" ? "Белый список" : theme === "blocked" ? "Заблокирован" : "Доступен",
+	theme === "whitelist"
+		? "Белый список"
+		: theme === "blocked"
+			? "Заблокирован"
+			: "Доступен",
 );
 const subtitle = $derived(
 	theme === "whitelist"

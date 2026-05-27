@@ -16,6 +16,7 @@ use rocket_client_addr::ClientRealAddr;
 use serde::Serialize;
 use sqlx::postgres::PgPool;
 use sqlx::types::Uuid;
+use sqlx::types::chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
@@ -162,4 +163,21 @@ pub async fn feedback(
     .map_err(|_| Status::InternalServerError)?;
 
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ApiStatusResponse {
+    domain_count: usize,
+    v4_count: usize,
+    last_update: Option<DateTime<Utc>>,
+}
+
+#[get("/status")]
+pub async fn get_system_status(checker: &State<Arc<RwLock<Checker>>>) -> Json<ApiStatusResponse> {
+    let checker_ref = checker.read().await;
+    Json(ApiStatusResponse {
+        domain_count: checker_ref.total_domains().await,
+        v4_count: checker_ref.total_v4s().await,
+        last_update: checker_ref.last_update(),
+    })
 }

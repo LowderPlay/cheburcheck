@@ -30,7 +30,8 @@ const error = $derived.by(() => {
 <div class="flex items-center gap-4">
 	<TriangleAlert size={48} class="text-red-500" aria-hidden="true" />
 	<h2 class="text-4xl trackin text-red-500 uppercase">
-		{status} {reason}
+		{status}
+		{reason}
 	</h2>
 </div>
 <p class="text-2xl text-neutral-500">

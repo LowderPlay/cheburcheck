@@ -16,7 +16,7 @@ import KbHeading from "$lib/components/kb/KbHeading.svelte";
 	<p>
 		На этой странице собраны ответы на часто задаваемые вопросы. Если вас
 		интересует что-то ещё - пишите нам на почту
-		<a href="mailto:support@cheburcheck.ru"> support@cheburcheck.ru </a>
+		<a href="mailto:support@cheburcheck.ru">support@cheburcheck.ru</a>
 		.
 	</p>
 

@@ -40,5 +40,5 @@ const queryClient = new QueryClient({
 </svelte:head>
 
 <QueryClientProvider client={queryClient}>
-	<AppShell> {@render children()} </AppShell>
+	<AppShell>{@render children()} </AppShell>
 </QueryClientProvider>

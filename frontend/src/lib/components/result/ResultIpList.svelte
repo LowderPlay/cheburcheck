@@ -34,7 +34,8 @@ let {
 			{#if subnetSize}
 				<span class="text-xs text-neutral-500">
 					({subnetSize}
-					всего, проверено {ips.length})
+					всего, проверено {ips.length}
+					)
 				</span>
 			{:else}
 				<span class="text-xs text-neutral-500">({ips.length} адресов)</span>

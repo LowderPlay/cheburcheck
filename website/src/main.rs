@@ -161,13 +161,16 @@ async fn rocket() -> _ {
         .mount("/", routes![api::feedback]) // DEPRECATED: backwards compatibility
         .mount(
             "/api/v1",
-            routes![api::check, api::healthcheck, api::feedback],
+            routes![
+                api::check,
+                api::healthcheck,
+                api::feedback,
+                api::get_system_status,
+                whitelist::histogram
+            ],
         )
         .mount("/agency", routes![agency::upload_report])
-        .mount(
-            "/whitelist",
-            routes![whitelist::histogram, whitelist::export_csv],
-        )
+        .mount("/whitelist", routes![whitelist::export_csv])
         .mount("/", routes![frontend_index, frontend_asset])
         .register("/", catchers![api_error])
 }

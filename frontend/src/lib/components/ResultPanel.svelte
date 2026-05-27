@@ -77,7 +77,10 @@ const providerCidrs = (provider: Provider) =>
 	<ResultTargetCard targetType={result.targetType} target={result.target} />
 
 	{#if result.asnInfo}
-		<ResultAsnSummary total={allPrefixes.length} blocked={blockedPrefixes.length} />
+		<ResultAsnSummary
+			total={allPrefixes.length}
+			blocked={blockedPrefixes.length}
+		/>
 	{/if}
 
 	<div class="mb-8 grid grid-cols-1 gap-8 sm:grid-cols-2">

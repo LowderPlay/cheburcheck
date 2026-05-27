@@ -1,14 +1,28 @@
 <script lang="ts">
+import { createQuery } from "@tanstack/svelte-query";
 import { BarChart } from "layerchart";
+import { fetchWhitelistHistogram } from "$lib/api/whitelist";
 import KbArticle from "$lib/components/kb/KbArticle.svelte";
 import KbCaption from "$lib/components/kb/KbCaption.svelte";
 import KbChartFrame from "$lib/components/kb/KbChartFrame.svelte";
 import KbCode from "$lib/components/kb/KbCode.svelte";
-import KbDivider from "$lib/components/kb/KbDivider.svelte";
 import KbFileLink from "$lib/components/kb/KbFileLink.svelte";
 import KbHeading from "$lib/components/kb/KbHeading.svelte";
 import KbNote from "$lib/components/kb/KbNote.svelte";
-import { histogram1m, histogram30k } from "$lib/data/mock";
+
+const histogram30kQuery = createQuery(() => ({
+	queryKey: ["whitelist", "histogram", 30_000, "filtered"],
+	queryFn: () => fetchWhitelistHistogram(30_000, true),
+}));
+
+const histogram1mQuery = createQuery(() => ({
+	queryKey: ["whitelist", "histogram", 1_000_000],
+	queryFn: () => fetchWhitelistHistogram(1_000_000),
+}));
+
+const histogramError = $derived(
+	histogram30kQuery.isError || histogram1mQuery.isError,
+);
 
 const chartSeries = [
 	{
@@ -146,9 +160,12 @@ $ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.7
 		Гистограмма количества доменов относительно их положения в рейтинге
 		(топ-30k, без .co.uk)
 	</KbCaption>
+	{#if histogramError}
+		<KbNote>Не удалось загрузить данные гистограммы.</KbNote>
+	{/if}
 	<KbChartFrame>
 		<BarChart
-			data={histogram30k}
+			data={histogram30kQuery.data ?? []}
 			x="label"
 			y="count"
 			series={chartSeries}
@@ -163,7 +180,7 @@ $ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.7
 	</KbCaption>
 	<KbChartFrame>
 		<BarChart
-			data={histogram1m}
+			data={histogram1mQuery.data ?? []}
 			x="label"
 			y="count"
 			series={chartSeries}

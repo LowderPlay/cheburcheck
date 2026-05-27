@@ -11,7 +11,7 @@
 			"enabled": true
 		},
 		"formatter": {
-			"whitespaceSensitivity": "css",
+			"whitespaceSensitivity": "ignore",
 			"enabled": true
 		}
 	},

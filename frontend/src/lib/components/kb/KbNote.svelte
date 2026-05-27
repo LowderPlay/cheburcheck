@@ -18,5 +18,5 @@ let {
 		: ''}"
 >
 	<TriangleAlert size={32} aria-hidden="true" />
-	<span> {@render children()} </span>
+	<span>{@render children()} </span>
 </p>
