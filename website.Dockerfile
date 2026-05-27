@@ -4,7 +4,12 @@ WORKDIR /build
 
 COPY . .
 
-RUN apt update && apt install -y libssl-dev pkg-config
+RUN apt update && apt install -y ca-certificates curl libssl-dev pkg-config && \
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt install -y nodejs && \
+    corepack enable && \
+    corepack prepare pnpm@10.33.0 --activate && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/build/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
@@ -25,9 +30,6 @@ RUN apt update && apt install -y libssl3 ca-certificates curl
 COPY --from=build /build/website/Rocket.toml ./
 ## copy the main binary
 COPY --from=build /build/main ./
-
-COPY --from=build /build/website/static ./static
-COPY --from=build /build/website/templates ./templates
 
 ## ensure the container listens globally on port 8080
 ENV ROCKET_ADDRESS=::

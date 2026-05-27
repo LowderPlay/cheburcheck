@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@source "../../node_modules/layerchart/dist";
+
+@theme {
+	--color-surface-100: #171717;
+	--color-surface-200: #262626;
+	--color-surface-300: #404040;
+	--color-surface-content: #e5e5e5;
+	--color-danger: #ef4444;
+	--color-primary: 188 86% 53%;
+}
+
+@layer base {
+	::-webkit-scrollbar {
+		width: 8px;
+	}
+
+	::-webkit-scrollbar-track {
+		background: #09090b;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background: #262626;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: #404040;
+	}
+}
