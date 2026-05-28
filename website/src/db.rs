@@ -2,14 +2,14 @@ use crate::agency::Agency;
 use querying::target::Target;
 use querying::{Check, CheckVerdict, Checker};
 use rocket::http::Status;
-use rocket::outcome::{try_outcome, IntoOutcome};
+use rocket::outcome::{IntoOutcome, try_outcome};
 use rocket::request::{FromRequest, Outcome};
 use rocket::tokio::sync::RwLockReadGuard;
 use rocket::{Request, State};
 use rocket_client_addr::ClientRealAddr;
 use serde::Serialize;
-use sqlx::types::chrono::NaiveDateTime;
 use sqlx::types::Uuid;
+use sqlx::types::chrono::NaiveDateTime;
 
 pub async fn save_query(
     db: &mut sqlx::PgConnection,
@@ -40,12 +40,14 @@ pub async fn save_query(
 
     let (resolved_ips, cdn_networks) = match target {
         Target::Asn(_) => (vec![], vec![]),
-        _ => (check
-                  .ips
-                  .iter()
-                  .map(|i| i.to_string())
-                  .collect::<Vec<String>>(),
-              cdn_networks)
+        _ => (
+            check
+                .ips
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<String>>(),
+            cdn_networks,
+        ),
     };
 
     let id = sqlx::query_scalar(
@@ -93,11 +95,12 @@ impl<'r> FromRequest<'r> for Agency {
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let pool = request.guard::<&State<sqlx::PgPool>>().await.unwrap();
-        let mut db = try_outcome!(pool
-            .acquire()
-            .await
-            .map_err(|e| Some(e))
-            .or_forward(Status::InternalServerError));
+        let mut db = try_outcome!(
+            pool.acquire()
+                .await
+                .map_err(|e| Some(e))
+                .or_forward(Status::InternalServerError)
+        );
         let token = request.headers().get_one("Authorization");
 
         let token = try_outcome!(
@@ -166,7 +169,6 @@ pub async fn collect_histogram(
     limit: i32,
     filter: bool,
 ) -> Result<Vec<WhitelistHistogramBin>, sqlx::Error> {
-
     sqlx::query_as!(
         WhitelistHistogramBin,
         "WITH bins AS (
@@ -181,7 +183,10 @@ FROM bins b
 LEFT JOIN whitelist w
   ON FLOOR(w.rank / $2) = b.bin
 GROUP BY b.bin
-ORDER BY b.bin;", bins, limit / bins, filter
+ORDER BY b.bin;",
+        bins,
+        limit / bins,
+        filter
     )
     .fetch_all(db)
     .await

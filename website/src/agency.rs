@@ -1,10 +1,10 @@
 use reports::AgencyReport;
+use rocket::State;
 use rocket::http::Status;
 use rocket::serde::json::serde_json::json;
 use rocket::serde::json::{Json, Value};
 use rocket::serde::msgpack::MsgPack;
 use rocket_client_addr::ClientRealAddr;
-use rocket::State;
 use sqlx::Acquire;
 use sqlx::postgres::PgPool;
 
@@ -20,7 +20,10 @@ pub async fn upload_report(
     agency: Agency,
     pool: &State<PgPool>,
 ) -> Result<Json<Value>, (Status, String)> {
-    let mut db = pool.acquire().await.map_err(|e| (Status::InternalServerError, e.to_string()))?;
+    let mut db = pool
+        .acquire()
+        .await
+        .map_err(|e| (Status::InternalServerError, e.to_string()))?;
     let mut tx = db
         .begin()
         .await

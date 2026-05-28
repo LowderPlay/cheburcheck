@@ -1,9 +1,9 @@
-use crate::updater::{fetch_db, Updatable};
+use crate::updater::{Updatable, fetch_db};
 use async_trait::async_trait;
 use ipnet::IpNet;
 use ipnet_trie::IpnetTrie;
 use log::info;
-use serde::{de, Deserialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serializer, de};
 use std::collections::VecDeque;
 use std::io;
 use std::io::{BufRead, Error, Read};
@@ -40,8 +40,10 @@ where
 }
 
 impl CdnList {
-    pub fn new() -> CdnList{
-        CdnList { trie: IpnetTrie::new() }
+    pub fn new() -> CdnList {
+        CdnList {
+            trie: IpnetTrie::new(),
+        }
     }
 
     pub fn load<R: Read>(list_reader: R) -> Result<Self, Error> {
@@ -50,7 +52,7 @@ impl CdnList {
         Ok(list)
     }
 
-    pub fn update<R: Read>(&mut self, list_reader: R) -> Result<(), Error>  {
+    pub fn update<R: Read>(&mut self, list_reader: R) -> Result<(), Error> {
         let mut trie = IpnetTrie::new();
         let mut rdr = csv::Reader::from_reader(list_reader);
         for result in rdr.deserialize() {
@@ -68,7 +70,9 @@ impl CdnList {
     }
 
     pub fn contains(&self, ip: &IpAddr) -> Option<NetworkRecord> {
-        self.trie.longest_match(&IpNet::from(*ip)).map(|(_, net)| net.clone())
+        self.trie
+            .longest_match(&IpNet::from(*ip))
+            .map(|(_, net)| net.clone())
     }
 }
 
@@ -90,7 +94,7 @@ impl Updatable for CdnList {
 
 pub struct RuBlacklist {
     ip_trie: IpnetTrie<()>,
-    domain_trie: Trie<String, String>,
+    domain_trie: Trie<u8, Box<str>>,
     pub domain_count: usize,
 }
 
@@ -99,22 +103,31 @@ impl RuBlacklist {
         RuBlacklist {
             ip_trie: Default::default(),
             domain_trie: TrieBuilder::new().build(),
-            domain_count: 0
+            domain_count: 0,
         }
     }
 
-    pub fn load<R: BufRead>(ip_reader: R, domain_reader: R, custom_domains_reader: R) -> Result<Self, Error> {
+    pub fn load<R: BufRead>(
+        ip_reader: R,
+        domain_reader: R,
+        custom_domains_reader: R,
+    ) -> Result<Self, Error> {
         let mut list = Self::new();
         list.update(ip_reader, domain_reader, custom_domains_reader)?;
         Ok(list)
     }
 
-    pub fn update<R: BufRead>(&mut self, ip_reader: R, domain_reader: R, custom_domains_reader: R) -> Result<(), Error>  {
+    pub fn update<R: BufRead>(
+        &mut self,
+        ip_reader: R,
+        domain_reader: R,
+        custom_domains_reader: R,
+    ) -> Result<(), Error> {
         let mut ip_trie = IpnetTrie::new();
         for net in ip_reader.lines() {
             let net = net?;
-            let net = IpNet::from_str(&net)
-                .map_err(|e| Error::new(io::ErrorKind::InvalidData, e))?;
+            let net =
+                IpNet::from_str(&net).map_err(|e| Error::new(io::ErrorKind::InvalidData, e))?;
             ip_trie.insert(net, ());
         }
         let (v4, v6) = ip_trie.ip_count();
@@ -125,7 +138,8 @@ impl RuBlacklist {
         let mut count = 0;
         for domain in domain_reader.lines().chain(custom_domains_reader.lines()) {
             let domain = domain?;
-            domain_trie.insert(Self::domain_chunks(&domain), domain);
+            let key = Self::domain_key(&domain);
+            domain_trie.insert(key, domain.into_boxed_str());
             count += 1;
         }
         info!("domain count: {}", count);
@@ -138,19 +152,58 @@ impl RuBlacklist {
         self.ip_trie.ip_count().0
     }
 
-    fn domain_chunks(domain: &str) -> Vec<String> {
-        domain.split(".").collect::<Vec<_>>()
-            .into_iter().map(|s| s.to_string())
-            .rev().collect()
+    fn domain_key(domain: &str) -> Vec<u8> {
+        let mut key = Vec::with_capacity(domain.len());
+        for (index, label) in domain.rsplit('.').enumerate() {
+            if index > 0 {
+                key.push(b'.');
+            }
+            key.extend_from_slice(label.as_bytes());
+        }
+        key
     }
 
     pub fn contains_ip(&self, ip: &IpAddr) -> Option<IpNet> {
-        self.ip_trie.longest_match(&IpNet::from(*ip)).map(|(ip, _)| ip)
+        self.ip_trie
+            .longest_match(&IpNet::from(*ip))
+            .map(|(ip, _)| ip)
     }
 
     pub fn contains_domain(&self, domain: &str) -> Option<String> {
-        self.domain_trie.common_prefix_search(Self::domain_chunks(domain)).next()
-            .map(|(_, b): (Vec<_>, &String)| b).cloned()
+        self.domain_trie
+            .common_prefix_search(Self::domain_key(domain))
+            .next()
+            .map(|(_, b): (Vec<_>, &Box<str>)| b.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuBlacklist;
+    use std::io::Cursor;
+
+    #[test]
+    fn domain_lookup_matches_subdomains_on_label_boundaries() {
+        let list = RuBlacklist::load(
+            Cursor::new(""),
+            Cursor::new("blocked.example\n"),
+            Cursor::new("custom.test\n"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            list.contains_domain("blocked.example"),
+            Some("blocked.example".to_string())
+        );
+        assert_eq!(
+            list.contains_domain("www.blocked.example"),
+            Some("blocked.example".to_string())
+        );
+        assert_eq!(
+            list.contains_domain("custom.test"),
+            Some("custom.test".to_string())
+        );
+        assert_eq!(list.contains_domain("notblocked.example"), None);
     }
 }
 
@@ -159,11 +212,22 @@ impl Updatable for RuBlacklist {
     type Base = (VecDeque<u8>, VecDeque<u8>, VecDeque<u8>);
 
     async fn download() -> Result<Self::Base, Error> {
-        Ok((VecDeque::from(
-            fetch_db(Self::get_url("RKN_NETS", "https://antifilter.network/download/ipsum.lst")).await?),
+        Ok((
             VecDeque::from(
-            fetch_db(Self::get_url("RKN_DOMAINS", "https://antifilter.download/list/domains.lst")).await?),
-            VecDeque::from(include_bytes!("../dist-domains.txt").to_vec())
+                fetch_db(Self::get_url(
+                    "RKN_NETS",
+                    "https://antifilter.network/download/ipsum.lst",
+                ))
+                .await?,
+            ),
+            VecDeque::from(
+                fetch_db(Self::get_url(
+                    "RKN_DOMAINS",
+                    "https://antifilter.download/list/domains.lst",
+                ))
+                .await?,
+            ),
+            VecDeque::from(include_bytes!("../dist-domains.txt").to_vec()),
         ))
     }
 

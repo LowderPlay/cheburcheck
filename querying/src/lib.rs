@@ -3,25 +3,25 @@ use crate::lists::{CdnList, NetworkRecord, RuBlacklist};
 use crate::resolver::{ResolveError, Resolver};
 use crate::target::Target;
 use crate::updater::Updatable;
+use arc_swap::ArcSwap;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use log::error;
+use maxminddb::MaxMindDbError;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
-use maxminddb::MaxMindDbError;
 use thiserror::Error;
 use tokio::sync::watch;
-use arc_swap::ArcSwap;
 
 pub mod asn;
 pub mod geoip;
 pub mod lists;
 pub mod resolver;
-pub mod updater;
-pub mod target;
 pub mod subnet_sampler;
+pub mod target;
+pub mod updater;
 
 pub use subnet_sampler::{sample_ipv4_subnet, sample_ipv6_subnet};
 
@@ -62,7 +62,11 @@ pub enum CheckError {
     NotFound,
 }
 
-pub type Bases = (<GeoIp as Updatable>::Base, <RuBlacklist as Updatable>::Base, <CdnList as Updatable>::Base);
+pub type Bases = (
+    <GeoIp as Updatable>::Base,
+    <RuBlacklist as Updatable>::Base,
+    <CdnList as Updatable>::Base,
+);
 
 impl Checker {
     pub async fn new() -> Checker {
@@ -91,7 +95,7 @@ impl Checker {
             Err(e) => {
                 error!("{}", e);
                 return Err(CheckError::ResolveError(e));
-            },
+            }
         };
         let geo_ip = self.geo_ip.load();
         let geo = match ips.get(0).map(|ip| geo_ip.lookup(ip.clone())) {
@@ -100,17 +104,22 @@ impl Checker {
             Some(Err(e)) => {
                 error!("{}", e);
                 return Err(CheckError::GeoIpError);
-            },
+            }
         };
         let mut cdn_provider_subnets: HashMap<String, HashSet<NetworkRecord>> = HashMap::new();
 
         let cdn_list = self.cdn_list.load();
         ips.iter()
             .filter_map(|ip| cdn_list.contains(ip))
-            .map(|ip| (match &ip.region {
-                None => ip.provider.clone(),
-                Some(region) => format!("{} ({})", ip.provider, region),
-            }, ip.clone()))
+            .map(|ip| {
+                (
+                    match &ip.region {
+                        None => ip.provider.clone(),
+                        Some(region) => format!("{} ({})", ip.provider, region),
+                    },
+                    ip.clone(),
+                )
+            })
             .for_each(|(k, v)| {
                 cdn_provider_subnets.entry(k).or_default().insert(v);
             });
@@ -118,10 +127,11 @@ impl Checker {
         let ru_blacklist = self.ru_blacklist.load();
         let domain = match &target {
             Target::Domain(domain) => ru_blacklist.contains_domain(domain),
-            _ => None
+            _ => None,
         };
 
-        let rkn_subnets: HashSet<IpNet> = ips.iter()
+        let rkn_subnets: HashSet<IpNet> = ips
+            .iter()
             .filter_map(|ip| ru_blacklist.contains_ip(ip))
             .collect();
 
@@ -161,14 +171,20 @@ impl Checker {
             None
         };
 
-        let asn_has_blocked = asn_info.as_ref()
+        let asn_has_blocked = asn_info
+            .as_ref()
             .map(|info| !info.blocked_prefixes.is_empty())
             .unwrap_or(false);
 
         let has_blocked_subnets = !rkn_subnets.is_empty();
 
         Ok(Check {
-            verdict: match (domain, cdn_provider_subnets.is_empty(), asn_has_blocked, has_blocked_subnets) {
+            verdict: match (
+                domain,
+                cdn_provider_subnets.is_empty(),
+                asn_has_blocked,
+                has_blocked_subnets,
+            ) {
                 (None, true, false, false) => CheckVerdict::Clear,
                 (domain, _, _, _) => CheckVerdict::Blocked {
                     rkn_domain: domain,
@@ -187,7 +203,11 @@ impl Checker {
     }
 
     pub async fn download_all() -> Result<Bases, io::Error> {
-        Ok((GeoIp::download().await?, RuBlacklist::download().await?, CdnList::download().await?))
+        Ok((
+            GeoIp::download().await?,
+            RuBlacklist::download().await?,
+            CdnList::download().await?,
+        ))
     }
 
     pub async fn update_all(&self, (geo_ip_base, ru_blacklist_base, cdn_list_base): Bases) {
@@ -199,7 +219,11 @@ impl Checker {
             }
         };
 
-        let ru_blacklist = match RuBlacklist::load(ru_blacklist_base.0, ru_blacklist_base.1, ru_blacklist_base.2) {
+        let ru_blacklist = match RuBlacklist::load(
+            ru_blacklist_base.0,
+            ru_blacklist_base.1,
+            ru_blacklist_base.2,
+        ) {
             Ok(ru_blacklist) => Some(ru_blacklist),
             Err(e) => {
                 error!("Failed to load RKN: {}", e);
@@ -235,5 +259,4 @@ impl Checker {
     pub async fn total_v4s(&self) -> usize {
         (self.cdn_list.load().v4_count() + self.ru_blacklist.load().v4_count()) as usize
     }
-
 }

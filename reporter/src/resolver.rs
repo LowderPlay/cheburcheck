@@ -16,8 +16,6 @@ impl Resolver {
 impl Resolve for Resolver {
     fn resolve(&self, _: Name) -> Resolving {
         let ip = self.ip.clone();
-        Box::pin(async move {
-            Ok(Addrs::from(Box::new(vec![ip].into_iter())))
-        })
+        Box::pin(async move { Ok(Addrs::from(Box::new(vec![ip].into_iter()))) })
     }
 }

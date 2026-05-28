@@ -57,20 +57,22 @@ pub async fn fetch_asn_prefixes(asn: u32) -> Result<Vec<String>, AsnError> {
         "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{}",
         asn
     );
-    
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    
+
     let response = client.get(&url).send().await?;
-    
+
     if response.status() == 404 {
         return Err(AsnError::NotFound);
     }
-    
-    let data: RipeStatResponse = response.json().await
+
+    let data: RipeStatResponse = response
+        .json()
+        .await
         .map_err(|e| AsnError::ParseError(e.to_string()))?;
-    
+
     Ok(data.data.prefixes.into_iter().map(|p| p.prefix).collect())
 }
 
@@ -86,7 +88,7 @@ pub async fn fetch_asn_prefixes_cached(
     let prefixes = fetch_asn_prefixes(asn).await?;
 
     cache_result(asn, prefixes.clone());
-    
+
     Ok(prefixes)
 }
 
@@ -107,20 +109,21 @@ impl AsnInfo {
     }
 
     pub fn ipv4_prefixes(&self) -> Vec<&str> {
-        self.prefixes.iter()
+        self.prefixes
+            .iter()
             .filter(|p| !p.contains(':'))
             .map(|s| s.as_str())
             .collect()
     }
-    
+
     pub fn ipv6_prefixes(&self) -> Vec<&str> {
-        self.prefixes.iter()
+        self.prefixes
+            .iter()
             .filter(|p| p.contains(':'))
             .map(|s| s.as_str())
             .collect()
     }
 }
-
 
 pub struct AsnCache {
     cache: Arc<RwLock<HashMap<u32, CachedAsnData>>>,

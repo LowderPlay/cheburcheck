@@ -1,9 +1,9 @@
+use crate::Verbosity;
+use log::info;
+use reports::Evidence;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
-use log::info;
-use reports::Evidence;
-use crate::Verbosity;
 
 #[derive(Default)]
 pub struct Counter {
@@ -31,8 +31,12 @@ impl Counter {
             for (target, evidence) in &self.results {
                 match evidence {
                     Evidence::Ok if verbosity >= &Verbosity::All => println!("    [Ok] {}", target),
-                    Evidence::Blocked if verbosity >= &Verbosity::Block => println!("    [Blocked] {}", target),
-                    Evidence::ConnectError if verbosity >= &Verbosity::Error => println!("    [ConnectError] {}", target),
+                    Evidence::Blocked if verbosity >= &Verbosity::Block => {
+                        println!("    [Blocked] {}", target)
+                    }
+                    Evidence::ConnectError if verbosity >= &Verbosity::Error => {
+                        println!("    [ConnectError] {}", target)
+                    }
                     _ => {}
                 }
             }
@@ -55,12 +59,16 @@ impl Counter {
 impl Display for Counter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let total = self.total();
-        write!(f, "OK {} ({:.2}%) | Blocked {} (early: {}) ({:.2}%) | Error {} ({:.2}%)",
-               self.ok,
-               self.ok as f32 / total as f32 * 100.0,
-               self.block, self.early,
-               self.block as f32 / total as f32 * 100.0,
-               self.err,
-               self.err as f32 / total as f32 * 100.0)
+        write!(
+            f,
+            "OK {} ({:.2}%) | Blocked {} (early: {}) ({:.2}%) | Error {} ({:.2}%)",
+            self.ok,
+            self.ok as f32 / total as f32 * 100.0,
+            self.block,
+            self.early,
+            self.block as f32 / total as f32 * 100.0,
+            self.err,
+            self.err as f32 / total as f32 * 100.0
+        )
     }
 }

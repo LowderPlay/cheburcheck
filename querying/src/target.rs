@@ -15,7 +15,6 @@ pub enum Target {
     Asn(u32),
 }
 
-
 impl From<&str> for Target {
     fn from(input: &str) -> Self {
         if input.to_lowercase().starts_with("as") {
@@ -32,13 +31,12 @@ impl From<&str> for Target {
                     return Target::Ipv4Subnet(ipv4_net);
                 }
             }
-            
+
             if let Ok(ipv6_net) = input.parse::<Ipv6Net>() {
                 if ipv6_net.prefix_len() >= 32 {
                     return Target::Ipv6Subnet(ipv6_net);
                 }
             }
-            
         }
 
         if let Ok(ipv4) = input.parse::<Ipv4Addr>() {
@@ -84,27 +82,27 @@ impl Target {
                     |asn, prefixes| resolver.asn_cache.cache_asn(asn, prefixes),
                 )
                 .await?;
-                
+
                 if prefixes.is_empty() {
                     return Ok(vec![]);
                 }
-                
+
                 if prefixes.len() > 100 {
                     prefixes.truncate(100);
                 }
-                
+
                 let mut all_ips = Vec::new();
-                
+
                 for prefix in &prefixes {
                     if let Ok(ipv4_net) = prefix.parse::<Ipv4Net>() {
                         all_ips.extend(sample_ipv4_subnet(ipv4_net));
                     } else if let Ok(ipv6_net) = prefix.parse::<Ipv6Net>() {
                         all_ips.extend(sample_ipv6_subnet(ipv6_net));
-                    } 
+                    }
                 }
-                
+
                 all_ips
-            },
+            }
         })
     }
 
