@@ -1,13 +1,10 @@
 <script lang="ts">
-import { createQuery } from "@tanstack/svelte-query";
-import { fetchStatus } from "$lib/api/status";
 import SearchForm from "$lib/components/SearchForm.svelte";
 import StatCard from "$lib/components/StatCard.svelte";
+import { getStatusContext } from "$lib/context/status";
 
-const status = createQuery(() => ({
-	queryKey: ["status"],
-	queryFn: () => fetchStatus(),
-}));
+const statusQuery = getStatusContext();
+const status = $derived(statusQuery.data);
 </script>
 
 <svelte:head>
@@ -34,12 +31,12 @@ const status = createQuery(() => ({
 	<StatCard
 		icon="globe"
 		label="Количество доменов"
-		value={new Intl.NumberFormat('ru-RU').format(status.data?.domain_count ?? 0)}
+		value={new Intl.NumberFormat('ru-RU').format(status?.domain_count ?? 0)}
 	/>
 	<StatCard
 		icon="server"
 		label="Количество IPv4-адресов"
-		value={new Intl.NumberFormat('ru-RU').format(status.data?.v4_count ?? 0)}
+		value={new Intl.NumberFormat('ru-RU').format(status?.v4_count ?? 0)}
 	/>
 	<StatCard
 		icon="activity"
@@ -51,6 +48,6 @@ const status = createQuery(() => ({
 			hour: '2-digit',
 			minute: '2-digit',
 			second: '2-digit',
-		}).format(new Date(status.data?.last_update ?? 0))}
+		}).format(new Date(status?.last_update ?? 0))}
 	/>
 </div>

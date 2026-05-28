@@ -170,6 +170,7 @@ pub struct ApiStatusResponse {
     domain_count: usize,
     v4_count: usize,
     last_update: Option<DateTime<Utc>>,
+    version: &'static str,
 }
 
 #[get("/status")]
@@ -179,5 +180,6 @@ pub async fn get_system_status(checker: &State<Arc<RwLock<Checker>>>) -> Json<Ap
         domain_count: checker_ref.total_domains().await,
         v4_count: checker_ref.total_v4s().await,
         last_update: checker_ref.last_update(),
+        version: env!("CARGO_PKG_VERSION"),
     })
 }

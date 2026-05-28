@@ -29,32 +29,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
-    let app_version = website_version(&manifest_dir)?;
 
-    run_pnpm(&manifest_dir, &["install", "--frozen-lockfile"], None)?;
-    run_pnpm(&manifest_dir, &["build"], Some(&app_version))?;
+    run_pnpm(&manifest_dir, &["install", "--frozen-lockfile"])?;
+    run_pnpm(&manifest_dir, &["build"])?;
 
     Ok(())
 }
 
-fn website_version(manifest_dir: &PathBuf) -> Result<String, Box<dyn Error>> {
-    let manifest = fs::read_to_string(manifest_dir.join("../website/Cargo.toml"))?;
-    let manifest: CargoManifest = toml::from_str(&manifest)?;
-
-    Ok(manifest.package.version)
-}
-
-fn run_pnpm(
-    manifest_dir: &PathBuf,
-    args: &[&str],
-    app_version: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
+fn run_pnpm(manifest_dir: &PathBuf, args: &[&str]) -> Result<(), Box<dyn Error>> {
     let mut command = Command::new(pnpm());
     command.args(args).current_dir(manifest_dir);
-
-    if let Some(app_version) = app_version {
-        command.env("VITE_APP_VERSION", app_version);
-    }
 
     let status = command.status()?;
 

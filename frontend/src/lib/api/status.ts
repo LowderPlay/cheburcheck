@@ -2,6 +2,7 @@ export type StatusMetrics = {
 	domain_count: number;
 	v4_count: number;
 	last_update: string | null;
+	version: string;
 };
 
 export class StatusRequestError extends Error {

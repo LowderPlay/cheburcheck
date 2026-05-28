@@ -1,13 +1,57 @@
 <script lang="ts">
 import { CloudAlert, Copyright } from "@lucide/svelte";
+import { createQuery } from "@tanstack/svelte-query";
 import type { Snippet } from "svelte";
+import type { StatusMetrics } from "$lib/api/status";
+import { fetchStatus } from "$lib/api/status";
+import { setStatusContext } from "$lib/context/status";
 import GitHubIcon from "./GitHubIcon.svelte";
 
-let {
-	children,
-	version = import.meta.env.VITE_APP_VERSION,
-}: { children: Snippet; version?: string } = $props();
+let { children }: { children: Snippet } = $props();
 const year = new Date().getFullYear();
+const statusCacheKey = "cheburcheck:status";
+
+type CachedStatus = {
+	data: StatusMetrics;
+	updatedAt: number;
+};
+
+function getCachedStatus() {
+	const cachedStatus = localStorage.getItem(statusCacheKey);
+	if (!cachedStatus) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(cachedStatus) as CachedStatus;
+	} catch {
+		localStorage.removeItem(statusCacheKey);
+		return null;
+	}
+}
+
+const cachedStatus = getCachedStatus();
+const status = createQuery(() => ({
+	queryKey: ["status"],
+	queryFn: () => fetchStatus(),
+	initialData: cachedStatus?.data,
+	initialDataUpdatedAt: cachedStatus?.updatedAt,
+}));
+setStatusContext(status);
+
+$effect(() => {
+	if (!status.data) {
+		return;
+	}
+
+	localStorage.setItem(
+		statusCacheKey,
+		JSON.stringify({
+			data: status.data,
+			updatedAt: Date.now(),
+		}),
+	);
+});
 </script>
 
 <header class="mx-auto mb-12 w-full max-w-250 border-b border-neutral-800 pb-4">
@@ -25,7 +69,7 @@ const year = new Date().getFullYear();
 				class="flex items-center gap-2 text-neutral-500 no-underline"
 				href="https://github.com/LowderPlay/cheburcheck"
 			>
-				<span>v{version}</span>
+				<span>v{status.data?.version}</span>
 				<GitHubIcon />
 			</a>
 		</div>
