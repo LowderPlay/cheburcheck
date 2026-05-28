@@ -2,8 +2,6 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde::Deserialize;
-
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=package.json");
     println!("cargo:rerun-if-changed=pnpm-lock.yaml");

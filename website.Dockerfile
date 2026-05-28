@@ -44,7 +44,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends libssl3 ca-certificates && \
+    apt-get install -y --no-install-recommends libssl3 ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system app && \
     useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
