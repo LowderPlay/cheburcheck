@@ -1,4 +1,4 @@
-import adapter from "@sveltejs/adapter-static";
+import adapter from "@sveltejs/adapter-node";
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
@@ -8,12 +8,7 @@ const config = {
 			filename.split(/[/\\]/).includes("node_modules") ? undefined : true,
 	},
 	kit: {
-		adapter: adapter({
-			pages: "dist",
-			assets: "dist",
-			fallback: "index.html",
-			strict: true,
-		}),
+		adapter: adapter({ out: "build" }),
 	},
 };
 

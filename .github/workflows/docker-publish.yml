@@ -1,4 +1,4 @@
-name: Build and Publish Website Docker Image
+name: Build and Publish Docker Images
 
 on:
   push:
@@ -13,7 +13,19 @@ env:
 
 jobs:
   build:
+    name: Build ${{ matrix.service }} image
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: website
+            file: ./website/Dockerfile
+            context: .
+            image_suffix: ""
+          - service: frontend
+            file: ./frontend/Dockerfile
+            context: ./frontend
+            image_suffix: "-frontend"
     permissions:
       contents: read
       packages: write
@@ -38,7 +50,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -51,8 +63,8 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: ./website.Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
