@@ -1,19 +1,8 @@
 use std::error::Error;
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Deserialize;
-
-#[derive(Deserialize)]
-struct CargoManifest {
-    package: CargoPackage,
-}
-
-#[derive(Deserialize)]
-struct CargoPackage {
-    version: String,
-}
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=package.json");

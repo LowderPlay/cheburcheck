@@ -9,7 +9,6 @@ use std::io;
 use std::io::{BufRead, Error, Read};
 use std::net::IpAddr;
 use std::str::FromStr;
-use trie_rs::map::{Trie, TrieBuilder};
 
 pub struct CdnList {
     trie: IpnetTrie<NetworkRecord>,
@@ -94,7 +93,7 @@ impl Updatable for CdnList {
 
 pub struct RuBlacklist {
     ip_trie: IpnetTrie<()>,
-    domain_trie: Trie<u8, Box<str>>,
+    blocked_domains: Vec<Box<str>>,
     pub domain_count: usize,
 }
 
@@ -102,7 +101,7 @@ impl RuBlacklist {
     pub fn new() -> RuBlacklist {
         RuBlacklist {
             ip_trie: Default::default(),
-            domain_trie: TrieBuilder::new().build(),
+            blocked_domains: Vec::new(),
             domain_count: 0,
         }
     }
@@ -134,33 +133,23 @@ impl RuBlacklist {
         info!("ip count: v4={}, v6={}", v4, v6);
         self.ip_trie = ip_trie;
 
-        let mut domain_trie = TrieBuilder::new();
+        let mut blocked_domains = Vec::new();
         let mut count = 0;
         for domain in domain_reader.lines().chain(custom_domains_reader.lines()) {
             let domain = domain?;
-            let key = Self::domain_key(&domain);
-            domain_trie.insert(key, domain.into_boxed_str());
+            blocked_domains.push(domain.into_boxed_str());
             count += 1;
         }
+        blocked_domains.sort_unstable();
+        blocked_domains.dedup();
         info!("domain count: {}", count);
         self.domain_count = count;
-        self.domain_trie = domain_trie.build();
+        self.blocked_domains = blocked_domains;
         Ok(())
     }
 
     pub fn v4_count(&self) -> u32 {
         self.ip_trie.ip_count().0
-    }
-
-    fn domain_key(domain: &str) -> Vec<u8> {
-        let mut key = Vec::with_capacity(domain.len());
-        for (index, label) in domain.rsplit('.').enumerate() {
-            if index > 0 {
-                key.push(b'.');
-            }
-            key.extend_from_slice(label.as_bytes());
-        }
-        key
     }
 
     pub fn contains_ip(&self, ip: &IpAddr) -> Option<IpNet> {
@@ -170,10 +159,20 @@ impl RuBlacklist {
     }
 
     pub fn contains_domain(&self, domain: &str) -> Option<String> {
-        self.domain_trie
-            .common_prefix_search(Self::domain_key(domain))
-            .next()
-            .map(|(_, b): (Vec<_>, &Box<str>)| b.to_string())
+        let mut suffix = domain;
+        loop {
+            if let Ok(index) = self
+                .blocked_domains
+                .binary_search_by(|blocked_domain| blocked_domain.as_ref().cmp(suffix))
+            {
+                return Some(self.blocked_domains[index].to_string());
+            }
+
+            match suffix.find('.') {
+                Some(dot) => suffix = &suffix[dot + 1..],
+                None => return None,
+            }
+        }
     }
 }
 
