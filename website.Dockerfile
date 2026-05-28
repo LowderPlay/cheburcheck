@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.10
 
 FROM docker.io/rust:1-slim-bookworm AS build
 
