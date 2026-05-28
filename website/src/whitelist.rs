@@ -1,12 +1,12 @@
+use crate::db::{WhitelistHistogramBin, collect_histogram};
+use rocket::State;
 use rocket::futures::StreamExt;
 use rocket::http::{ContentType, Status};
 use rocket::request::FromParam;
-use rocket_cache_response::CacheResponse;
-use rocket::State;
-use std::io;
 use rocket::serde::json::Json;
-use crate::db::{collect_histogram, WhitelistHistogramBin};
+use rocket_cache_response::CacheResponse;
 use sqlx::postgres::PgPool;
+use std::io;
 
 enum ExportType {
     Full,
@@ -39,7 +39,10 @@ pub async fn export_csv(
         }
     };
 
-    let mut db = pool.acquire().await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut db = pool
+        .acquire()
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     let mut stream = db
         .copy_out_raw(query)
@@ -61,9 +64,19 @@ pub async fn export_csv(
 }
 
 #[get("/histogram?<filter>&<limit>")]
-pub async fn histogram(pool: &State<PgPool>, filter: Option<bool>, limit: Option<i32>) -> Result<Json<Vec<WhitelistHistogramBin>>, Status> {
+pub async fn histogram(
+    pool: &State<PgPool>,
+    filter: Option<bool>,
+    limit: Option<i32>,
+) -> Result<Json<Vec<WhitelistHistogramBin>>, Status> {
     let limit = limit.unwrap_or(100_000).clamp(0, 1_000_000);
-    let mut db = pool.acquire().await.map_err(|_| Status::InternalServerError)?;
-    Ok(Json(collect_histogram(&mut *db, 50, limit, filter.is_some()).await
-        .map_err(|_| Status::InternalServerError)?))
+    let mut db = pool
+        .acquire()
+        .await
+        .map_err(|_| Status::InternalServerError)?;
+    Ok(Json(
+        collect_histogram(&mut *db, 50, limit, filter.is_some())
+            .await
+            .map_err(|_| Status::InternalServerError)?,
+    ))
 }

@@ -5,205 +5,21 @@ mod api;
 mod db;
 mod whitelist;
 
-use crate::db::{check_whitelist, save_query, WhitelistedEntry};
-use log::{error, info, warn, LevelFilter};
-use querying::target::Target;
-use querying::{Check, CheckError, CheckVerdict, Checker};
+use env_logger::Env;
+use log::{LevelFilter, error, info};
+use querying::Checker;
 use rocket::fairing::AdHoc;
-use rocket::fs::FileServer;
-use rocket::http::Status;
-use rocket::response::content::RawJavaScript;
+use rocket::http::{ContentType, Status};
+use rocket::response::content::RawHtml;
+use rocket::serde::json::Json;
 use rocket::tokio::sync::RwLock;
 use rocket::tokio::time;
-use rocket::{fairing, tokio, Build, Request, Rocket, State};
-use rocket_cache_response::CacheResponse;
-use rocket_client_addr::ClientRealAddr;
-use rocket_dyn_templates::{context, Metadata, Template};
+use rocket::{Build, Request, Rocket, fairing, tokio};
 use serde::Serialize;
+use sqlx::postgres::PgPool;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use env_logger::Env;
-use rocket::serde::json::Json;
-use sqlx::types::Uuid;
-use sqlx::postgres::PgPool;
-
-#[derive(Serialize)]
-struct GlobalContext {
-    version: &'static str,
-}
-
-impl GlobalContext {
-    fn new() -> Self {
-        GlobalContext {
-            version: env!("CARGO_PKG_VERSION"),
-        }
-    }
-}
-
-#[get("/")]
-async fn index(checker: &State<Arc<RwLock<Checker>>>) -> Template {
-    let checker_ref = checker.read().await;
-    Template::render(
-        "index",
-        context! {
-            global: GlobalContext::new(),
-            domain_count: format_number(checker_ref.total_domains().await),
-            v4_count: format_number(checker_ref.total_v4s().await),
-            last_update: checker_ref.last_update(),
-        },
-    )
-}
-
-#[get("/kb/<page>")]
-fn page(metadata: Metadata, page: &str) -> Option<Template> {
-    let page = format!("pages/{}", page);
-    if !metadata.contains_template(&page) {
-        return None;
-    }
-
-    Some(Template::render(
-        page,
-        context! {
-            global: GlobalContext::new(),
-        },
-    ))
-}
-
-#[get("/healthcheck")]
-async fn healthcheck(checker: &State<Arc<RwLock<Checker>>>) -> (Status, String) {
-    if checker.read().await.last_update().is_some() {
-        (Status::Ok, "OK".to_string())
-    } else {
-        (Status::InternalServerError, "LOADING DATABASES".to_string())
-    }
-}
-
-#[post("/feedback/<uuid>/<works>")]
-async fn feedback(uuid: &str, works: bool, pool: &State<PgPool>, addr: &ClientRealAddr) -> Result<(), Status> {
-    sqlx::query!(
-        "INSERT INTO human_reports (id, source_ip, works) VALUES ($1, $2, $3)",
-        Uuid::try_parse(uuid).map_err(|_| Status::BadRequest)?,
-        addr.ip.to_string(),
-        works
-    ).execute(&**pool).await.map_err(|_| Status::InternalServerError)?;
-
-    Ok(())
-}
-
-#[get("/check?<target>")]
-async fn check(
-    target: &str,
-    checker: &State<Arc<RwLock<Checker>>>,
-    addr: &ClientRealAddr,
-    pool: &State<PgPool>,
-) -> Result<Template, Status> {
-    let target = Target::from(target.trim());
-    let check = checker.read().await.check(target.clone()).await;
-
-    let mut db = pool.acquire().await.map_err(|_| Status::InternalServerError)?;
-
-    let id: Option<String> = if let Ok(check) = &check {
-        match save_query(&mut *db, &target, check, addr, checker.read().await).await {
-            Ok(id) => Some(id.to_string()),
-            Err(e) => {
-                warn!("Failed to save check: {:?}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    let whitelist: Option<WhitelistedEntry> = if let Target::Domain(domain) = &target {
-        check_whitelist(domain, &mut *db)
-            .await
-            .map_err(|_| Status::InternalServerError)?
-    } else {
-        None
-    };
-
-    match check {
-        Err(CheckError::NotFound) => Ok(Template::render(
-            "empty",
-            context! {
-                global: GlobalContext::new(),
-                target: target.to_query(),
-                target_type: target.readable_type(),
-            },
-        )),
-        Ok(Check {
-            verdict: CheckVerdict::Clear,
-            geo,
-            ips,
-            rkn_subnets,
-            asn_info,
-        }) => Ok(Template::render(
-            "result",
-            context! {
-                id,
-                global: GlobalContext::new(),
-                found: false,
-                target: target.to_query(),
-                target_type: target.readable_type(),
-                blocked_subnets: rkn_subnets.iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>(),
-                whitelist,
-                ips,
-                geo,
-                subnet_size: target.subnet_size(),
-                asn_info,
-            },
-        )),
-        Ok(Check {
-            verdict:
-                CheckVerdict::Blocked {
-                    rkn_domain,
-                    cdn_provider_subnets,
-                },
-            geo,
-            rkn_subnets,
-            ips,
-            asn_info,
-        }) => Ok(Template::render(
-            "result",
-            context! {
-                id,
-                global: GlobalContext::new(),
-                found: true,
-                domain: rkn_domain,
-                providers: cdn_provider_subnets,
-                blocked_subnets: rkn_subnets.iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>(),
-                target: target.to_query(),
-                target_type: target.readable_type(),
-                whitelist,
-                ips,
-                geo,
-                subnet_size: target.subnet_size(),
-                asn_info,
-            },
-        )),
-        Err(e) => {
-            error!("check failed {:?}", e);
-            Err(Status::InternalServerError)
-        }
-    }
-}
-
-#[catch(default)]
-fn default(status: Status, _req: &Request) -> Template {
-    Template::render(
-        "error",
-        context! {
-            global: GlobalContext::new(),
-            status: status.code,
-            reason: status.reason_lossy(),
-        },
-    )
-}
 
 #[derive(Debug, Serialize)]
 struct JsonError {
@@ -213,44 +29,57 @@ struct JsonError {
 
 #[catch(default)]
 fn api_error(status: Status, _: &Request) -> Json<JsonError> {
-    Json(JsonError { code: status.code, info: status.reason_lossy().to_string() })
+    Json(JsonError {
+        code: status.code,
+        info: status.reason_lossy().to_string(),
+    })
 }
 
-#[rocket::get("/lucide.js")]
-fn lucide() -> CacheResponse<RawJavaScript<&'static [u8]>> {
-    CacheResponse::Public {
-        responder: RawJavaScript(include_bytes!(concat!(env!("OUT_DIR"), "/lucide.js"))),
-        max_age: 604800,
-        must_revalidate: false,
-    }
-}
-#[rocket::get("/chart.js")]
-fn chartjs() -> CacheResponse<RawJavaScript<&'static [u8]>> {
-    CacheResponse::Public {
-        responder: RawJavaScript(include_bytes!(concat!(env!("OUT_DIR"), "/chart.js"))),
-        max_age: 604800,
-        must_revalidate: false,
-    }
-}
-#[rocket::get("/chartjs-plugin-datalabels.js")]
-fn chartjs_datalabels() -> CacheResponse<RawJavaScript<&'static [u8]>> {
-    CacheResponse::Public {
-        responder: RawJavaScript(include_bytes!(concat!(env!("OUT_DIR"), "/chartjs-plugin-datalabels.js"))),
-        max_age: 604800,
-        must_revalidate: false,
-    }
+#[get("/")]
+fn frontend_index() -> Option<RawHtml<&'static str>> {
+    frontend::DIST
+        .get_file("index.html")
+        .and_then(frontend::File::contents_utf8)
+        .map(RawHtml)
 }
 
-fn format_number(number: usize) -> String {
-    number
-        .to_string()
-        .as_bytes()
-        .rchunks(3)
-        .rev()
-        .map(std::str::from_utf8)
-        .collect::<Result<Vec<&str>, _>>()
-        .unwrap()
-        .join(" ")
+#[get("/<path..>", rank = 20)]
+fn frontend_asset(path: PathBuf) -> Option<(ContentType, &'static [u8])> {
+    if is_backend_path(&path) {
+        return None;
+    }
+
+    if let Some(file) = embedded_file(&path) {
+        return Some((content_type(&path), file.contents()));
+    }
+
+    if path.extension().is_none() {
+        let index = frontend::DIST.get_file("index.html")?;
+        return Some((ContentType::HTML, index.contents()));
+    }
+
+    None
+}
+
+fn embedded_file(path: &PathBuf) -> Option<&'static frontend::File<'static>> {
+    let path = path.to_string_lossy().replace('\\', "/");
+    frontend::DIST.get_file(path)
+}
+
+fn is_backend_path(path: &PathBuf) -> bool {
+    matches!(
+        path.components()
+            .next()
+            .and_then(|component| component.as_os_str().to_str()),
+        Some("api" | "agency" | "whitelist")
+    )
+}
+
+fn content_type(path: &PathBuf) -> ContentType {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(ContentType::from_extension)
+        .unwrap_or(ContentType::Binary)
 }
 
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
@@ -293,8 +122,8 @@ async fn rocket() -> _ {
                     info!("Downloaded, updating...");
                     checker_clone.read().await.update_all(bases).await;
                     info!("Updated databases");
-                },
-                Err(e) => log::error!("Failed to download all DBs"),
+                }
+                Err(_) => log::error!("Failed to download all DBs"),
             }
         }
     });
@@ -306,14 +135,18 @@ async fn rocket() -> _ {
     let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
 
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(std::env::var("DATABASE_MAX_CONNECTIONS")
-            .unwrap_or("100".to_string())
-            .parse()
-            .unwrap())
-        .min_connections(std::env::var("DATABASE_MIN_CONNECTIONS")
-            .unwrap_or("10".to_string())
-            .parse()
-            .unwrap())
+        .max_connections(
+            std::env::var("DATABASE_MAX_CONNECTIONS")
+                .unwrap_or("100".to_string())
+                .parse()
+                .unwrap(),
+        )
+        .min_connections(
+            std::env::var("DATABASE_MIN_CONNECTIONS")
+                .unwrap_or("10".to_string())
+                .parse()
+                .unwrap(),
+        )
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Duration::from_secs(60))
         .connect(&dotenvy::var("DATABASE_URL").expect("DATABASE_URL must be set"))
@@ -325,14 +158,19 @@ async fn rocket() -> _ {
         .manage(pool)
         .manage(api_limiter)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
-        .mount("/", routes![index, check, healthcheck, page, feedback])
-        .mount("/vendor", routes![lucide, chartjs, chartjs_datalabels])
-        .mount("/api/v1", routes![api::check])
-        .register("/api", catchers![api_error])
+        .mount("/", routes![api::feedback]) // DEPRECATED: backwards compatibility
+        .mount(
+            "/api/v1",
+            routes![
+                api::check,
+                api::healthcheck,
+                api::feedback,
+                api::get_system_status,
+                whitelist::histogram
+            ],
+        )
         .mount("/agency", routes![agency::upload_report])
-        .mount("/whitelist", routes![whitelist::histogram, whitelist::export_csv])
-        .register("/agency", catchers![api_error])
-        .register("/", catchers![default])
-        .mount("/", FileServer::from(PathBuf::from("static")))
-        .attach(Template::fairing())
+        .mount("/whitelist", routes![whitelist::export_csv])
+        .mount("/", routes![frontend_index, frontend_asset])
+        .register("/", catchers![api_error])
 }

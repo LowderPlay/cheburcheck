@@ -1,2 +1,9 @@
 .git/
 target/
+frontend/node_modules
+.idea/
+**/target/
+**/.env
+frontend/.svelte-kit/
+frontend/dist/
+frontend/build/

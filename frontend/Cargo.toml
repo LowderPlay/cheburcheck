@@ -1,0 +1,11 @@
+[package]
+name = "frontend"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+include_dir = "0.7"
+
+[build-dependencies]
+serde = { workspace = true }
+toml = "0.9"

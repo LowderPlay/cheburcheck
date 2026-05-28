@@ -1,4 +1,4 @@
-use crate::db::{check_whitelist, save_query, WhitelistedEntry};
+use crate::db::{WhitelistedEntry, check_whitelist, save_query};
 use governor::clock::DefaultClock;
 use governor::state::keyed::DefaultKeyedStateStore;
 use governor::{Quota, RateLimiter};
@@ -8,20 +8,21 @@ use querying::geoip::IpInfo;
 use querying::lists::NetworkRecord;
 use querying::target::Target;
 use querying::{Check, CheckError, CheckVerdict, Checker};
+use rocket::State;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::tokio::sync::RwLock;
-use rocket::State;
 use rocket_client_addr::ClientRealAddr;
 use serde::Serialize;
 use sqlx::postgres::PgPool;
+use sqlx::types::Uuid;
+use sqlx::types::chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-pub type ApiRateLimiter =
-    RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
+pub type ApiRateLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>;
 
 pub fn build_rate_limiter(per_minute: u32) -> ApiRateLimiter {
     RateLimiter::keyed(Quota::per_minute(
@@ -45,6 +46,8 @@ pub struct ApiCheckResponse {
     pub asn_info: Option<AsnInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist: Option<WhitelistedEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subnet_size: Option<String>,
 }
 
 fn build_response(
@@ -79,6 +82,7 @@ fn build_response(
         geo: check.geo,
         asn_info: check.asn_info,
         whitelist,
+        subnet_size: target.subnet_size(),
     }
 }
 
@@ -130,4 +134,52 @@ pub async fn check(
             Err(Status::InternalServerError)
         }
     }
+}
+
+#[get("/healthcheck")]
+pub async fn healthcheck(checker: &State<Arc<RwLock<Checker>>>) -> (Status, String) {
+    if checker.read().await.last_update().is_some() {
+        (Status::Ok, "OK".to_string())
+    } else {
+        (Status::InternalServerError, "LOADING DATABASES".to_string())
+    }
+}
+
+#[post("/feedback/<uuid>/<works>")]
+pub async fn feedback(
+    uuid: &str,
+    works: bool,
+    pool: &State<PgPool>,
+    addr: &ClientRealAddr,
+) -> Result<(), Status> {
+    sqlx::query!(
+        "INSERT INTO human_reports (id, source_ip, works) VALUES ($1, $2, $3)",
+        Uuid::try_parse(uuid).map_err(|_| Status::BadRequest)?,
+        addr.ip.to_string(),
+        works
+    )
+    .execute(&**pool)
+    .await
+    .map_err(|_| Status::InternalServerError)?;
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct ApiStatusResponse {
+    domain_count: usize,
+    v4_count: usize,
+    last_update: Option<DateTime<Utc>>,
+    version: &'static str,
+}
+
+#[get("/status")]
+pub async fn get_system_status(checker: &State<Arc<RwLock<Checker>>>) -> Json<ApiStatusResponse> {
+    let checker_ref = checker.read().await;
+    Json(ApiStatusResponse {
+        domain_count: checker_ref.total_domains().await,
+        v4_count: checker_ref.total_v4s().await,
+        last_update: checker_ref.last_update(),
+        version: env!("CARGO_PKG_VERSION"),
+    })
 }

@@ -1,25 +1,25 @@
-mod resolver;
 mod counter;
+mod resolver;
 
 use crate::resolver::Resolver;
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use futures::stream::FuturesUnordered;
+use counter::Counter;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use indicatif::{ProgressIterator, ProgressStyle};
-use log::{error, info, warn, LevelFilter};
+use log::{LevelFilter, error, info, warn};
 use reports::{AgencyReport, Evidence, ReporterConfig};
-use reqwest::redirect::Policy;
 use reqwest::Client;
+use reqwest::redirect::Policy;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
-use counter::Counter;
 
 const JUNK: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/junk.bin"));
 
@@ -33,7 +33,11 @@ enum Verbosity {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about = "DPI probe: checks blockage of domains by SNI")]
+#[command(
+    author,
+    version,
+    about = "DPI probe: checks blockage of domains by SNI"
+)]
 struct Args {
     /// Output results file
     #[arg(required = false)]
@@ -91,7 +95,6 @@ struct Args {
     /// Agency endpoint API key
     #[arg(short, long, env = "AGENCY_KEY")]
     key: Option<String>,
-
 }
 
 impl Args {
@@ -129,17 +132,27 @@ async fn main() -> Result<()> {
     {
         let file_limit: Option<usize> = unsafe { libc::getdtablesize() }.try_into().ok();
         if matches!(file_limit, Some(file_limit) if file_limit <= args.probe_count + 128) {
-            warn!("Open file limit is too low ({})! Consider increasing it using `ulimit -n`.", file_limit.unwrap());
+            warn!(
+                "Open file limit is too low ({})! Consider increasing it using `ulimit -n`.",
+                file_limit.unwrap()
+            );
         }
     }
 
     let api_client = Client::new();
     info!("Loading targets list...");
     let targets = include_str!(concat!(env!("OUT_DIR"), "/list.csv"));
-    let targets: Vec<String> = targets.lines().take(args.count)
-        .map(|s| s.split(",").last().unwrap().to_string()).collect();
+    let targets: Vec<String> = targets
+        .lines()
+        .take(args.count)
+        .map(|s| s.split(",").last().unwrap().to_string())
+        .collect();
 
-    info!("Probing {} domains with {} concurrent probes...", targets.len(), args.probe_count);
+    info!(
+        "Probing {} domains with {} concurrent probes...",
+        targets.len(),
+        args.probe_count
+    );
     let sem = Arc::new(tokio::sync::Semaphore::new(args.probe_count));
     let cancelled = wait_for_ctrlc();
     let start = Instant::now();
@@ -194,7 +207,11 @@ async fn main() -> Result<()> {
         counter.save_results(output)?;
     }
 
-    info!("Probed {} domains in {}s! \nSummary: {counter}", counter.total(), start.elapsed().as_secs());
+    info!(
+        "Probed {} domains in {}s! \nSummary: {counter}",
+        counter.total(),
+        start.elapsed().as_secs()
+    );
     if let Err(e) = upload_results(&args, &api_client, counter.results).await {
         warn!("Upload failed: {}", e);
     }
@@ -202,10 +219,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn upload_results(args: &Args, api_client: &Client, results: HashMap<String, Evidence>) -> Result<()> {
+async fn upload_results(
+    args: &Args,
+    api_client: &Client,
+    results: HashMap<String, Evidence>,
+) -> Result<()> {
     info!("Uploading to {}", args.agency_endpoint);
 
-    let uploaded = api_client.post(&args.agency_endpoint)
+    let uploaded = api_client
+        .post(&args.agency_endpoint)
         .header("Content-Type", "application/msgpack")
         .body(rmp_serde::to_vec(&AgencyReport {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -215,7 +237,9 @@ async fn upload_results(args: &Args, api_client: &Client, results: HashMap<Strin
 
     let uploaded = if let Some(key) = &args.key {
         uploaded.header("Authorization", format!("Bearer {key}"))
-    } else { uploaded };
+    } else {
+        uploaded
+    };
 
     let uploaded = uploaded.send().await?;
 
@@ -246,9 +270,7 @@ fn wait_for_ctrlc() -> impl Fn() -> bool {
         }
     });
 
-    move || {
-        cancelled.load(Ordering::SeqCst) != 0
-    }
+    move || cancelled.load(Ordering::SeqCst) != 0
 }
 
 enum Verdict {
@@ -257,19 +279,21 @@ enum Verdict {
 }
 
 async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Error> {
-    let url = format!("http{}://{target}/{}", if args.http {""} else {"s"}, args.path);
+    let url = format!(
+        "http{}://{target}/{}",
+        if args.http { "" } else { "s" },
+        args.path
+    );
     let mut attempts = 0;
 
     loop {
         attempts += 1;
         let client = build_client(&args, 1)?;
-        let mut resp = client.get(&url)
-            .header("Range", "bytes=0-65536");
+        let mut resp = client.get(&url).header("Range", "bytes=0-65536");
         if args.tx {
             resp = resp.body(JUNK)
         }
-        let resp = resp.send()
-            .await;
+        let resp = resp.send().await;
 
         let resp = match resp {
             Ok(resp) => match (resp.status(), resp.bytes().await) {
@@ -283,7 +307,11 @@ async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Err
                 let warn = if !status.is_success() {
                     Some(format!("Domain {target} returned non-OK code: {status}"))
                 } else if bytes.len() < 65535 {
-                    Some(format!("Domain {target} completed with {} bytes: \n{}", bytes.len(), String::from_utf8_lossy(bytes.as_ref())))
+                    Some(format!(
+                        "Domain {target} completed with {} bytes: \n{}",
+                        bytes.len(),
+                        String::from_utf8_lossy(bytes.as_ref())
+                    ))
                 } else {
                     None
                 };
@@ -309,7 +337,7 @@ async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Err
                     error!("{} -> Error: {:?}", target, e);
                     Err(e)
                 }
-            },
-        }
+            }
+        };
     }
 }

@@ -9,7 +9,8 @@ use std::io::Error;
 
 pub async fn fetch_db<T: IntoUrl + Display>(url: T) -> Result<Vec<u8>, Error> {
     info!("Fetching {}", url);
-    let response = reqwest::get(url).await
+    let response = reqwest::get(url)
+        .await
         .map_err(|e| Error::new(io::ErrorKind::Other, e))?
         .error_for_status()
         .map_err(|e| Error::new(io::ErrorKind::Other, e))?;

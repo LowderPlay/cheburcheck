@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "frontend",
     "querying",
     "reporter",
     "reports",
