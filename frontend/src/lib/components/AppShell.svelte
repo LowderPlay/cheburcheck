@@ -2,6 +2,7 @@
 import { CloudAlert, Copyright } from "@lucide/svelte";
 import { createQuery } from "@tanstack/svelte-query";
 import type { Snippet } from "svelte";
+import { browser } from "$app/environment";
 import type { StatusMetrics } from "$lib/api/status";
 import { fetchStatus } from "$lib/api/status";
 import { setStatusContext } from "$lib/context/status";
@@ -17,6 +18,10 @@ type CachedStatus = {
 };
 
 function getCachedStatus() {
+	if (!browser) {
+		return null;
+	}
+
 	const cachedStatus = localStorage.getItem(statusCacheKey);
 	if (!cachedStatus) {
 		return null;
@@ -40,7 +45,7 @@ const status = createQuery(() => ({
 setStatusContext(status);
 
 $effect(() => {
-	if (!status.data) {
+	if (!browser || !status.data) {
 		return;
 	}
 

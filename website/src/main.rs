@@ -9,15 +9,13 @@ use env_logger::Env;
 use log::{LevelFilter, error, info};
 use querying::Checker;
 use rocket::fairing::AdHoc;
-use rocket::http::{ContentType, Status};
-use rocket::response::content::RawHtml;
+use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::tokio::sync::RwLock;
 use rocket::tokio::time;
 use rocket::{Build, Request, Rocket, fairing, tokio};
 use serde::Serialize;
 use sqlx::postgres::PgPool;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,53 +31,6 @@ fn api_error(status: Status, _: &Request) -> Json<JsonError> {
         code: status.code,
         info: status.reason_lossy().to_string(),
     })
-}
-
-#[get("/")]
-fn frontend_index() -> Option<RawHtml<&'static str>> {
-    frontend::DIST
-        .get_file("index.html")
-        .and_then(frontend::File::contents_utf8)
-        .map(RawHtml)
-}
-
-#[get("/<path..>", rank = 20)]
-fn frontend_asset(path: PathBuf) -> Option<(ContentType, &'static [u8])> {
-    if is_backend_path(&path) {
-        return None;
-    }
-
-    if let Some(file) = embedded_file(&path) {
-        return Some((content_type(&path), file.contents()));
-    }
-
-    if path.extension().is_none() {
-        let index = frontend::DIST.get_file("index.html")?;
-        return Some((ContentType::HTML, index.contents()));
-    }
-
-    None
-}
-
-fn embedded_file(path: &PathBuf) -> Option<&'static frontend::File<'static>> {
-    let path = path.to_string_lossy().replace('\\', "/");
-    frontend::DIST.get_file(path)
-}
-
-fn is_backend_path(path: &PathBuf) -> bool {
-    matches!(
-        path.components()
-            .next()
-            .and_then(|component| component.as_os_str().to_str()),
-        Some("api" | "agency" | "whitelist")
-    )
-}
-
-fn content_type(path: &PathBuf) -> ContentType {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .and_then(ContentType::from_extension)
-        .unwrap_or(ContentType::Binary)
 }
 
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
@@ -158,7 +109,6 @@ async fn rocket() -> _ {
         .manage(pool)
         .manage(api_limiter)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
-        .mount("/", routes![api::feedback]) // DEPRECATED: backwards compatibility
         .mount(
             "/api/v1",
             routes![
@@ -171,6 +121,5 @@ async fn rocket() -> _ {
         )
         .mount("/agency", routes![agency::upload_report])
         .mount("/whitelist", routes![whitelist::export_csv])
-        .mount("/", routes![frontend_index, frontend_asset])
         .register("/", catchers![api_error])
 }
