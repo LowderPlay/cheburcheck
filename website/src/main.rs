@@ -109,7 +109,6 @@ async fn rocket() -> _ {
         .manage(pool)
         .manage(api_limiter)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
-        .mount("/", routes![api::feedback]) // DEPRECATED: backwards compatibility
         .mount(
             "/api/v1",
             routes![
