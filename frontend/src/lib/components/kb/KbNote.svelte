@@ -7,15 +7,17 @@ let {
 	variant = "warning",
 }: {
 	children: Snippet;
-	variant?: "warning";
+	variant?: "warning" | "info";
 } = $props();
+
+const variantStyle = {
+	warning: "border-red-900/30 bg-[#450a0a]/20 text-red-400",
+	info: "border-blue-900/30 bg-[#0a1045]/20 text-blue-400",
+};
 </script>
 
 <p
-	class="flex items-center gap-4 border p-4 text-xl [&_a]:text-inherit {variant ===
-	'warning'
-		? 'border-red-900/30 bg-[#450a0a]/20 text-red-400'
-		: ''}"
+	class="flex items-center gap-4 border p-4 text-xl [&_a]:text-inherit {variantStyle[variant]}"
 >
 	<TriangleAlert size={32} aria-hidden="true" />
 	<span>{@render children()} </span>

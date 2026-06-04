@@ -72,7 +72,12 @@ const verdictStyles = {
 	>
 		<h3 class="text-sm font-bold text-white uppercase flex items-center gap-2">
 			<Activity size={16} class="text-primary" />
-			Результаты динамической проверки
+			<a
+				class="underline decoration-dotted underline-offset-2"
+				href="/kb/probing"
+			>
+				Результаты динамической проверки
+			</a>
 		</h3>
 		<div class="text-xs text-neutral-400 flex items-center gap-3">
 			<div class="flex items-center gap-1">
