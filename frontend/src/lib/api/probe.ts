@@ -1,5 +1,3 @@
-import type { QueryClient } from "@tanstack/svelte-query";
-
 export type ProbeHostResult = {
 	host_id: string;
 	host: string;

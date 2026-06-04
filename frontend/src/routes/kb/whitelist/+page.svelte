@@ -67,13 +67,13 @@ const chartProps = {
 
 <KbArticle>
 	<h1>Белые списки доменов</h1>
+	<!-- biome-ignore format: link punctuation -->
 	<KbNote>
 		Не путать с
 		<a href="https://habr.com/ru/news/1000784/">
-			белыми списками <i>мобильного</i> интернета
-		</a>
-		!
+			белыми списками <i>мобильного</i> интернета</a>!
 	</KbNote>
+
 	<p>
 		Российские операторы связи начали применять новый тип блокировок CDN, при
 		котором загрузка контента обрывается после передачи примерно 16–20 килобайт
@@ -131,26 +131,28 @@ $ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.7
 100 65537  100 65537    0     0  55226      0  0:00:01  0:00:01 --:--:-- 55258
 	</KbCode>
 
-	<KbHeading id="автоматическое-сканирование">
+	<KbHeading
+		id="автоматическое-сканирование"
+		title="Автоматическое сканирование"
+	>
 		Автоматическое сканирование
 	</KbHeading>
+	<!-- biome-ignore format: link punctuation -->
 	<p>
 		Используя методы, указанные выше, мы разработали инструмент для
 		автоматического сканирования и анализа блокировок
 		<b>
 			<a href="https://github.com/LowderPlay/cheburcheck/tree/master/reporter">
-				Cheburcheck Reporter
-			</a>
-		</b>
-		.
+				Cheburcheck Reporter</a></b>.
 	</p>
+
+	<!-- biome-ignore format: link punctuation -->
 	<p>
 		Исходя из анализа 1,000,000 доменов из рейтинга
 		<a href="https://tranco-list.eu/list/2NPQ9">
-			Tranco list от 26 ноября 2025
-		</a>
-		, в белом списке содержится около 1000 доменов.
+			Tranco list от 26 ноября 2025</a>, в белом списке содержится около 1000 доменов.
 	</p>
+
 	<i>
 		* - Мы не включаем в это число домены из зоны .co.uk, так как по какой-то
 		причине, они все находятся в белом списке.
@@ -189,7 +191,9 @@ $ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.7
 		/>
 	</KbChartFrame>
 
-	<KbHeading id="скачать-списки">Скачать списки</KbHeading>
+	<KbHeading id="скачать-списки" title="Скачать списки">
+		Скачать списки
+	</KbHeading>
 	<p>Мы публикуем результаты наших сканирований в виде CSV-файлов:</p>
 	<KbFileLink href="/whitelist/full.csv">Полный список (CSV)</KbFileLink>
 	<KbFileLink href="/whitelist/domains.csv">Только домены (CSV)</KbFileLink>

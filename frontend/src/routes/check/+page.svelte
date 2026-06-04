@@ -15,6 +15,11 @@ import ResultPanel from "$lib/components/ResultPanel.svelte";
 import ProbeTable from "$lib/components/result/ProbeTable.svelte";
 import SearchForm from "$lib/components/SearchForm.svelte";
 
+type ProbeQueryData = {
+	probes: ProbeResult[];
+	status: ProbeStatus;
+};
+
 const queryClient = useQueryClient();
 const target = $derived(page.url.searchParams.get("target")?.trim() ?? "");
 
@@ -26,49 +31,72 @@ const checkQuery = createQuery(() => ({
 }));
 
 const queryId = $derived(checkQuery.data?.id);
+const shouldProbe = $derived(
+	!!queryId && checkQuery.data?.targetType === "Домен",
+);
 
-const probeQuery = createQuery(() => ({
-	queryKey: ["probes", queryId],
-	queryFn: () => ({
-		probes: [] as ProbeResult[],
-		status: {
-			status: "started",
-			online_probes: 0,
-			response_count: 0,
-		} as ProbeStatus,
-	}),
-	enabled: !!queryId,
-	staleTime: Infinity,
-	gcTime: Infinity,
-}));
-
-$effect(() => {
-	if (!queryId) return;
-
-	queryClient.setQueryData(["probes", queryId], {
+function createInitialProbeData(id: string): ProbeQueryData {
+	return {
 		probes: [],
 		status: {
-			id: queryId,
+			id,
 			target,
 			status: "started",
 			online_probes: 0,
 			response_count: 0,
 		},
-	});
+	};
+}
+
+const probeQuery = createQuery(() => ({
+	queryKey: ["probes", queryId],
+	queryFn: () => createInitialProbeData(queryId ?? ""),
+	enabled: shouldProbe,
+	staleTime: Infinity,
+	gcTime: Infinity,
+}));
+
+$effect(() => {
+	if (!queryId || !shouldProbe) return;
+
+	queryClient.setQueryData<ProbeQueryData>(
+		["probes", queryId],
+		createInitialProbeData(queryId),
+	);
 
 	const cleanup = startProbeSSE(
 		queryId,
 		(result) => {
-			queryClient.setQueryData(["probes", queryId], (old: any) => ({
-				...old,
-				probes: [...(old?.probes || []), result],
-			}));
+			queryClient.setQueryData<ProbeQueryData>(["probes", queryId], (old) => {
+				const current = old ?? createInitialProbeData(queryId);
+				const probes = current.probes.some(
+					(probe) => probe.probe_id === result.probe_id,
+				)
+					? current.probes.map((probe) =>
+							probe.probe_id === result.probe_id ? result : probe,
+						)
+					: [...current.probes, result];
+
+				return {
+					...current,
+					probes,
+					status: {
+						...current.status,
+						status: "progress",
+						response_count: probes.length,
+					},
+				};
+			});
 		},
 		(statusUpdate) => {
-			queryClient.setQueryData(["probes", queryId], (old: any) => ({
-				...old,
-				status: { ...(old?.status || {}), ...statusUpdate },
-			}));
+			queryClient.setQueryData<ProbeQueryData>(["probes", queryId], (old) => {
+				const current = old ?? createInitialProbeData(queryId);
+
+				return {
+					...current,
+					status: { ...current.status, ...statusUpdate },
+				};
+			});
 		},
 	);
 
@@ -97,7 +125,7 @@ const error = $derived(
 {:else if checkQuery.data}
 	<ResultPanel result={checkQuery.data} />
 
-	{#if probeQuery.data && checkQuery.data.targetType === 'Домен'}
+	{#if shouldProbe && probeQuery.data}
 		<ProbeTable
 			probes={probeQuery.data.probes}
 			status={probeQuery.data.status}

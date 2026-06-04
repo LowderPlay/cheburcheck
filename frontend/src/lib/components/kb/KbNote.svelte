@@ -17,8 +17,8 @@ const variantStyle = {
 </script>
 
 <p
-	class="flex items-center gap-4 border p-4 text-xl [&_a]:text-inherit {variantStyle[variant]}"
+	class="my-8 flex items-start gap-4 border-l-4 p-6 text-lg [&_a]:text-inherit [&_a]:font-bold {variantStyle[variant]}"
 >
-	<TriangleAlert size={32} aria-hidden="true" />
+	<TriangleAlert size={24} aria-hidden="true" class="mt-1 shrink-0" />
 	<span>{@render children()} </span>
 </p>

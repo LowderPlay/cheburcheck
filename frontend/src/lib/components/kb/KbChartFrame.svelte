@@ -10,6 +10,8 @@ let {
 } = $props();
 </script>
 
-<div class="{height} border border-neutral-800 bg-neutral-950/30 p-4">
+<div
+	class="{height} my-8 rounded-lg border border-neutral-800 bg-neutral-950/30 p-6 shadow-inner"
+>
 	{@render children()}
 </div>

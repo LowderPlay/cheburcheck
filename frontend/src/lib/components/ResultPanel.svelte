@@ -1,12 +1,12 @@
 <script lang="ts">
+import { Network, ScrollText } from "@lucide/svelte";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
 import ResultStringList from "./result/ResultStringList.svelte";
 import ResultTargetCard from "./result/ResultTargetCard.svelte";
 
-type Network = { cidr: string };
-type Provider = { name: string; networks: Network[] };
+type Provider = { name: string; networks: { cidr: string }[] };
 type AsnInfo = { prefixes: string[]; blockedPrefixes: string[] } | null;
 type ResultTheme = "blocked" | "clean" | "whitelist";
 
@@ -86,9 +86,9 @@ const providerCidrs = (provider: Provider) =>
 		<div class="space-y-4">
 			<div class="flex items-center gap-2 border-b border-neutral-800 pb-2">
 				<h3
-					class="text-xs font-bold text-white uppercase flex items-center gap-2"
+					class="text-sm font-bold text-white uppercase flex items-center gap-2"
 				>
-					<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+					<Network size={16} class="text-primary" />
 					Сетевые данные
 				</h3>
 			</div>
@@ -134,9 +134,9 @@ const providerCidrs = (provider: Provider) =>
 		<div class="space-y-4">
 			<div class="flex items-center gap-2 border-b border-neutral-800 pb-2">
 				<h3
-					class="text-xs font-bold text-white uppercase flex items-center gap-2"
+					class="text-sm font-bold text-white uppercase flex items-center gap-2"
 				>
-					<span class="w-1.5 h-1.5 rounded-full bg-primary"></span>
+					<ScrollText size={16} class="text-primary" />
 					Нахождение в списках
 				</h3>
 			</div>
