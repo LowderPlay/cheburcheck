@@ -1,5 +1,16 @@
 <script lang="ts">
-import { Network, ScrollText } from "@lucide/svelte";
+import {
+	Activity,
+	Globe,
+	Hash,
+	Info,
+	Layers,
+	MapPin,
+	Network,
+	ScrollText,
+	Server,
+	ShieldCheck,
+} from "@lucide/svelte";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
@@ -97,18 +108,18 @@ const providerCidrs = (provider: Provider) =>
 				class="border border-neutral-800 rounded-lg bg-neutral-900/10 px-4 py-1"
 			>
 				{#if !result.asnInfo}
-					<DetailRow label="IP-адреса">
+					<DetailRow label="IP-адреса" icon={Globe}>
 						<ResultIpList ips={result.ips} subnetSize={result.subnetSize} />
 					</DetailRow>
 				{/if}
 
-				<DetailRow label="Хостинг / ISP">
+				<DetailRow label="Хостинг / ISP" icon={Server}>
 					<span class={valueClass}>{result.geo.organisation || "-"}</span>
 				</DetailRow>
-				<DetailRow label="Локация">
+				<DetailRow label="Локация" icon={MapPin}>
 					<span class={valueClass}>{result.geo.location}</span>
 				</DetailRow>
-				<DetailRow label="ASN">
+				<DetailRow label="ASN" icon={Hash}>
 					<span class={valueClass}>
 						{#if result.geo.asn}
 							<a
@@ -124,7 +135,7 @@ const providerCidrs = (provider: Provider) =>
 				</DetailRow>
 
 				{#if result.asnInfo}
-					<DetailRow label="Подсети ASN">
+					<DetailRow label="Подсети ASN" icon={Layers}>
 						<ResultStringList items={allPrefixes} />
 					</DetailRow>
 				{/if}
@@ -144,7 +155,7 @@ const providerCidrs = (provider: Provider) =>
 			<div
 				class="border border-neutral-800 rounded-lg bg-neutral-900/10 px-4 py-1"
 			>
-				<DetailRow label="CDN">
+				<DetailRow label="CDN" icon={Activity}>
 					{#if result.providers.length > 0}
 						<p class={alertValueClass}>НАЙДЕН</p>
 					{:else}
@@ -153,13 +164,17 @@ const providerCidrs = (provider: Provider) =>
 				</DetailRow>
 
 				{#each result.providers as provider}
-					<DetailRow label={provider.name}>
+					<DetailRow label={provider.name} icon={Server}>
 						<ResultStringList items={providerCidrs(provider)} limit={5} />
 					</DetailRow>
 				{/each}
 
 				{#if result.whitelist}
-					<DetailRow label="Белый список (?)" href="/kb/whitelist">
+					<DetailRow
+						label="Белый список (?)"
+						href="/kb/whitelist"
+						icon={ShieldCheck}
+					>
 						<span class={successValueClass}>
 							НАЙДЕН -
 							<span
@@ -172,7 +187,7 @@ const providerCidrs = (provider: Provider) =>
 					</DetailRow>
 				{/if}
 
-				<DetailRow label="Реестр РКН">
+				<DetailRow label="Реестр РКН" icon={ScrollText}>
 					{#if result.domain}
 						<span class={alertValueClass}>ОГРАНИЧЕН</span>
 					{:else if result.blockedSubnets.length > 0}
@@ -188,13 +203,13 @@ const providerCidrs = (provider: Provider) =>
 				</DetailRow>
 
 				{#if result.domain}
-					<DetailRow label="Заблокированный домен">
+					<DetailRow label="Заблокированный домен" icon={Info}>
 						<span class={valueClass}>{result.domain}</span>
 					</DetailRow>
 				{/if}
 
 				{#if result.blockedSubnets.length > 0 && !result.asnInfo}
-					<DetailRow label="Заблокированные подсети">
+					<DetailRow label="Заблокированные подсети" icon={Layers}>
 						<div class="text-right">
 							{#each result.blockedSubnets as network}
 								<p class={valueClass}>{network}</p>
@@ -204,7 +219,7 @@ const providerCidrs = (provider: Provider) =>
 				{/if}
 
 				{#if result.asnInfo && blockedPrefixes.length > 0}
-					<DetailRow label="Заблокированные подсети ASN">
+					<DetailRow label="Заблокированные подсети ASN" icon={Layers}>
 						<ResultStringList items={blockedPrefixes} alert />
 					</DetailRow>
 				{/if}

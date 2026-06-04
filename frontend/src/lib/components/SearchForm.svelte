@@ -3,7 +3,7 @@ import { ChevronRight, Search } from "@lucide/svelte";
 </script>
 
 <form
-	class="relative flex w-full flex-col gap-3 sm:flex-row sm:gap-0"
+	class="group relative flex w-full flex-col gap-3 sm:flex-row sm:gap-0"
 	action="/check"
 >
 	<!-- svelte-ignore a11y_autofocus -->
@@ -25,9 +25,9 @@ import { ChevronRight, Search } from "@lucide/svelte";
 	</div>
 	<button
 		type="submit"
-		class="flex h-16 w-full cursor-pointer items-center justify-center gap-2 border-0 bg-neutral-100 px-6 font-[inherit] text-sm font-bold text-neutral-950 uppercase transition-colors hover:bg-white sm:ml-[-1px] sm:w-auto sm:justify-between"
+		class="flex h-16 w-full cursor-pointer items-center justify-center gap-2 border border-neutral-700 bg-neutral-800 px-6 font-[inherit] text-sm font-bold text-neutral-100 uppercase transition-colors hover:bg-neutral-700 group-focus-within:border-neutral-400 group-focus-within:bg-neutral-700 group-focus-within:hover:bg-neutral-600 sm:ml-[-1px] sm:w-auto sm:justify-between"
 	>
 		<span>Проверить</span>
-		<ChevronRight size={16} aria-hidden="true" />
+		<ChevronRight size={16} aria-hidden="true" class="text-primary" />
 	</button>
 </form>
