@@ -12,9 +12,7 @@ const status = $derived(statusQuery.data);
 </svelte:head>
 
 <div class="mb-8">
-	<h1
-		class="mb-2 text-2xl tracking-widest text-neutral-100 uppercase font-bold"
-	>
+	<h1 class="mb-2 text-2xl text-neutral-100 uppercase font-bold">
 		Статус Ресурса
 	</h1>
 	<p class="text-neutral-500">

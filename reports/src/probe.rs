@@ -54,6 +54,7 @@ pub struct HostProbeResult {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ProbeEvidence {
     ConnectionError,
     ClientHello,

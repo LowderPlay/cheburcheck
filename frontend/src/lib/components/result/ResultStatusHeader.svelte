@@ -37,18 +37,16 @@ const StatusIcon = $derived(
 );
 </script>
 
-<div class="mb-8 flex gap-4">
+<div class="flex items-center gap-4">
 	<div
-		class={`flex items-center justify-center border border-current bg-white/5 p-3 ${accentClass}`}
+		class={`flex items-center rounded-lg justify-center border border-current bg-white/5 p-3 ${accentClass}`}
 	>
 		<StatusIcon size={32} aria-hidden="true" />
 	</div>
 	<div>
-		<h2
-			class={`mb-1 text-3xl leading-[1.2] font-bold tracking-widest uppercase ${accentClass}`}
-		>
+		<h2 class={`text-2xl leading-tight font-bold uppercase ${accentClass}`}>
 			{title}
 		</h2>
-		<p class={`text-sm ${accentClass}`}>{subtitle}</p>
+		<p class="text-sm opacity-80">{subtitle}</p>
 	</div>
 </div>

@@ -14,12 +14,12 @@ let {
 	{#if href}
 		<a
 			{href}
-			class="text-xs tracking-wider text-neutral-500 uppercase underline decoration-neutral-500"
+			class="text-xs text-neutral-500 uppercase underline decoration-neutral-500"
 		>
 			{label}
 		</a>
 	{:else}
-		<span class="text-xs tracking-wider text-neutral-500 uppercase">
+		<span class="text-xs text-neutral-500 uppercase">
 			{label}
 		</span>
 	{/if}
