@@ -1,0 +1,4 @@
+ALTER TABLE reporters
+    ADD COLUMN region VARCHAR(255),
+    ADD COLUMN asn VARCHAR(32),
+    ADD COLUMN provider VARCHAR(255);

@@ -1,5 +1,5 @@
 [workspace]
-members = [
+members = ["probe",
     "querying",
     "reporter",
     "reports",
