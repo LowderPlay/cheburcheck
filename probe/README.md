@@ -9,8 +9,7 @@
 
 ## Сборка
 
-Готовые бинарные файлы и Debian-пакеты можно скачать на странице релизов:
-[https://github.com/LowderPlay/cheburcheck/releases](https://github.com/LowderPlay/cheburcheck/releases).
+Готовые бинарные файлы и Debian-пакеты можно скачать на [странице релизов](https://github.com/LowderPlay/cheburcheck/releases).
 
 На Debian-based дистрибутивах можно собрать пакет через `cargo-deb`:
 
@@ -43,7 +42,7 @@ cargo run --package probe --bin cheburprobe -- \
 
 ## Установка как systemd-демона
 
-Самый простой способ установки на Debian-based систему — скачать `.deb` пакет `cheburprobe` со  [страницы релизов](https://github.com/LowderPlay/cheburcheck/releases).
+Самый простой способ установки на Debian-based систему — скачать `.deb` пакет `cheburprobe` со [страницы релизов](https://github.com/LowderPlay/cheburcheck/releases).
 
 Debian-пакет устанавливает systemd unit `cheburprobe.service` и файл конфигурации `/etc/default/cheburprobe`.
 Сервис не включается автоматически: сначала нужно указать данные сканера.
@@ -119,7 +118,7 @@ docker run --rm \
 | `--mqtt-host`, `MQTT_HOST` | Адрес MQTT-брокера по WebSocket. Поддерживаются `ws://` и `wss://`. | `wss://cheburcheck.ru/mqtt` |
 | `--mqtt-port`, `MQTT_PORT` | Порт MQTT-брокера. | `443` |
 | `--mqtt-connection-timeout-secs`, `MQTT_CONNECTION_TIMEOUT_SECS` | Таймаут подключения к MQTT-брокеру. | `30` |
-| `--probe-id`, `PROBE_ID` | ID сканера | обязательно |
+| `--probe-id`, `PROBE_ID` | ID сканера. | обязательно |
 | `--probe-token`, `PROBE_TOKEN` | Секретный токен сканера. | обязательно |
 | `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `8` |
 | `RUST_LOG` | Уровень логирования. | `info` |

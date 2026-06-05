@@ -47,6 +47,3 @@ services:
       - "1883"
       - "11883"
       - "6060"
-
-volumes:
-  rmqtt-data:
