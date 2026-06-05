@@ -116,12 +116,12 @@ docker run --rm \
 
 | Параметр | Описание | Значение по умолчанию |
 | --- | --- | --- |
-| `--mqtt-host`, `MQTT_HOST` | Адрес MQTT-брокера по WebSocket. Поддерживаются `ws://` и `wss://`. | `ws://localhost:8080/mqtt` |
-| `--mqtt-port`, `MQTT_PORT` | Порт MQTT-брокера. | `8080` |
+| `--mqtt-host`, `MQTT_HOST` | Адрес MQTT-брокера по WebSocket. Поддерживаются `ws://` и `wss://`. | `wss://cheburcheck.ru/mqtt` |
+| `--mqtt-port`, `MQTT_PORT` | Порт MQTT-брокера. | `443` |
 | `--mqtt-connection-timeout-secs`, `MQTT_CONNECTION_TIMEOUT_SECS` | Таймаут подключения к MQTT-брокеру. | `30` |
 | `--probe-id`, `PROBE_ID` | ID сканера | обязательно |
 | `--probe-token`, `PROBE_TOKEN` | Секретный токен сканера. | обязательно |
-| `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `4` |
+| `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `8` |
 | `RUST_LOG` | Уровень логирования. | `info` |
 
 `MAX_CONCURRENT_TASKS` должен быть больше нуля.

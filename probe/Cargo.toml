@@ -17,6 +17,7 @@ systemd-units = [
     { unit-name = "cheburprobe", enable = false, start = false },
 ]
 assets = [
+    ["target/release/cheburprobe", "usr/bin/", "755"],
     ["debian/cheburprobe.default", "etc/default/cheburprobe", "644"],
 ]
 

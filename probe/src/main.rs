@@ -22,10 +22,10 @@ const CONFIG_TOPIC: &str = "probe/config/v1";
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about = "Dynamic probing daemon")]
 struct Args {
-    #[arg(long, env = "MQTT_HOST", default_value = "ws://localhost:8080/mqtt")]
+    #[arg(long, env = "MQTT_HOST", default_value = "wss://cheburcheck.ru/mqtt")]
     mqtt_host: String,
 
-    #[arg(long, env = "MQTT_PORT", default_value_t = 8080)]
+    #[arg(long, env = "MQTT_PORT", default_value_t = 443)]
     mqtt_port: u16,
 
     #[arg(long, env = "MQTT_CONNECTION_TIMEOUT_SECS", default_value_t = 30)]
@@ -37,7 +37,7 @@ struct Args {
     #[arg(long, env = "PROBE_TOKEN")]
     probe_token: String,
 
-    #[arg(long, env = "MAX_CONCURRENT_TASKS", default_value_t = 4)]
+    #[arg(long, env = "MAX_CONCURRENT_TASKS", default_value_t = 8)]
     max_concurrent_tasks: usize,
 }
 
