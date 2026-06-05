@@ -1,6 +1,0 @@
-max_row_limit = 10_000
-http_laddr = "0.0.0.0:6060"
-http_request_log = false
-
-message_expiry_interval = "5m"
-prometheus_metrics_cache_interval = "5s"

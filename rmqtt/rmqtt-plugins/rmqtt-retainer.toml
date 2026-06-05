@@ -1,5 +1,4 @@
-[storage]
-type = "ram"
+storage.type = "ram"
 
 max_retained_messages = 0
 max_payload_size = "1MB"

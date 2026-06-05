@@ -125,7 +125,7 @@ const error = $derived(
 {:else if checkQuery.data}
 	<ResultPanel result={checkQuery.data} />
 
-	{#if shouldProbe && probeQuery.data}
+	{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
 		<ProbeTable
 			probes={probeQuery.data.probes}
 			status={probeQuery.data.status}

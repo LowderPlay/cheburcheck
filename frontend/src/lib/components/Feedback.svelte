@@ -22,7 +22,7 @@ const submit = (works: boolean) => {
 	{#if feedbackMutation.isSuccess}
 		<div class={`flex items-center gap-2 py-2 text-lg text-green-500`}>
 			<ThumbsUp size={24} aria-hidden="true" />
-			<span>Спасибо за ваш отзыв!</span>
+			<span>Спасибо за отзыв!</span>
 		</div>
 	{:else}
 		<p class="mb-3 text-sm text-neutral-500">У вас работает этот ресурс?</p>
