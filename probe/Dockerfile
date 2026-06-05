@@ -10,8 +10,8 @@ RUN --mount=type=cache,id=probe-target,target=/build/target \
     --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
     set -eux; \
-    RUSTFLAGS="-C strip=symbols" cargo build --locked --release --package probe; \
-    cp target/release/probe ./probe-bin
+    RUSTFLAGS="-C strip=symbols" cargo build --locked --release --package probe --bin cheburprobe; \
+    cp target/release/cheburprobe ./probe-bin
 
 FROM docker.io/debian:bookworm-slim
 

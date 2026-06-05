@@ -1,0 +1,152 @@
+name: Build Probe
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-probe
+
+jobs:
+  linux-amd64:
+    name: Linux amd64 binary and .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        run: cargo build --release --package probe --bin cheburprobe
+
+      - name: Build Debian package
+        run: cargo deb --package probe --no-build -- --bin cheburprobe
+
+      - name: Upload Linux amd64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-linux-amd64
+          path: target/release/cheburprobe
+          compression-level: 0
+
+      - name: Upload Linux amd64 Debian package
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-linux-amd64-deb
+          path: target/debian/*.deb
+          compression-level: 0
+
+  linux-arm64:
+    name: Linux arm64 binary and .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: "aarch64-unknown-linux-gnu"
+          args: "--release --package probe --bin cheburprobe"
+          strip: true
+
+      - name: Build Debian package
+        run: cargo deb --package probe --target aarch64-unknown-linux-gnu --no-strip --no-build -- --bin cheburprobe
+
+      - name: Upload Linux arm64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-linux-arm64
+          path: target/aarch64-unknown-linux-gnu/release/cheburprobe
+          compression-level: 0
+
+      - name: Upload Linux arm64 Debian package
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-linux-arm64-deb
+          path: target/aarch64-unknown-linux-gnu/debian/*.deb
+          compression-level: 0
+
+  windows-amd64:
+    name: Windows amd64 binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --package probe --bin cheburprobe
+
+      - name: Upload Windows amd64 binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-windows-amd64
+          path: target/release/cheburprobe.exe
+          compression-level: 0
+
+  docker:
+    name: Docker image amd64/arm64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./probe/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

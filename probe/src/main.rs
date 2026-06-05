@@ -10,7 +10,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     })?;
 
     let mut options = MqttOptions::new(&args.probe_id, &args.mqtt_host, args.mqtt_port);
-    options.set_transport(Transport::Ws);
+    options.set_transport(mqtt_transport(&args.mqtt_host)?);
     options.set_credentials("probe", &args.probe_token);
     options.set_keep_alive(Duration::from_secs(10));
     options.set_last_will(LastWill::new(
@@ -100,8 +100,18 @@ async fn main() -> Result<()> {
                     let semaphore = task_semaphore.clone();
                     let topic = publish.topic;
                     let payload = publish.payload.to_vec();
+                    let received_at = Instant::now();
 
                     tokio::spawn(async move {
+                        let task: ProbeTask =
+                            match serde_json::from_slice(&payload).context("decode probe task") {
+                                Ok(task) => task,
+                                Err(error) => {
+                                    warn!("failed to decode task on {topic}: {error}");
+                                    return;
+                                }
+                            };
+
                         let permit = match semaphore.acquire_owned().await {
                             Ok(permit) => permit,
                             Err(error) => {
@@ -111,7 +121,7 @@ async fn main() -> Result<()> {
                         };
 
                         if let Err(error) =
-                            handle_task(&client, &args, &config, &topic, &payload).await
+                            handle_task(&client, &args, &config, &topic, task, received_at).await
                         {
                             warn!("failed to handle task on {topic}: {error}");
                         }
@@ -132,6 +142,16 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
+    }
+}
+
+fn mqtt_transport(mqtt_host: &str) -> Result<Transport> {
+    if mqtt_host.starts_with("wss://") {
+        Ok(Transport::wss_with_default_config())
+    } else if mqtt_host.starts_with("ws://") {
+        Ok(Transport::Ws)
+    } else {
+        bail!("MQTT_HOST must start with ws:// or wss://");
     }
 }
 
@@ -183,20 +203,28 @@ async fn handle_task(
     args: &Args,
     config: &Arc<RwLock<Option<ProbeConfig>>>,
     topic: &str,
-    payload: &[u8],
+    task: ProbeTask<'_>,
+    received_at: Instant,
 ) -> Result<()> {
-    let task: ProbeTask = serde_json::from_slice(payload).context("decode probe task")?;
     let job_id = topic
         .strip_prefix("probe/tasks/v1/")
         .filter(|id| !id.is_empty())
         .unwrap_or(&task.id);
+    let timeout = Duration::from_millis(task.timeout_ms);
+    let Some(remaining) = timeout.checked_sub(received_at.elapsed()) else {
+        warn!(
+            "dropping expired queued task {job_id}: timeout {}ms",
+            task.timeout_ms
+        );
+        return Ok(());
+    };
 
     let config = config.read().await.clone();
     let Some(config) = config else {
         bail!("no config");
     };
     let result_topic = format!("probe/results/v1/{job_id}/{}", args.probe_id);
-    let result = join_all(config.hosts.into_iter().map(|host| {
+    let probing = join_all(config.hosts.into_iter().map(|host| {
         let target = task.target.to_string();
         async move {
             let probe_evidence = probe_host(&host, &target).await;
@@ -205,8 +233,17 @@ async fn handle_task(
                 host_id: host.id,
             }
         }
-    }))
-    .await;
+    }));
+    let result = match time::timeout(remaining, probing).await {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(
+                "dropping expired task {job_id}: timeout {}ms",
+                task.timeout_ms
+            );
+            return Ok(());
+        }
+    };
 
     client
         .publish(

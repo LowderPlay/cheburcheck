@@ -2,6 +2,23 @@
 name = "probe"
 version = "0.1.0"
 edition = "2024"
+license-file = "../LICENSE"
+description = "Dynamic network probe daemon for Cheburcheck"
+
+[[bin]]
+name = "cheburprobe"
+path = "src/main.rs"
+
+[package.metadata.deb]
+name = "cheburprobe"
+maintainer = "Lowder <me@lowderplay.dev>"
+maintainer-scripts = "debian/"
+systemd-units = [
+    { unit-name = "cheburprobe", enable = false, start = false },
+]
+assets = [
+    ["debian/cheburprobe.default", "etc/default/cheburprobe", "644"],
+]
 
 [dependencies]
 anyhow = "1.0"
@@ -9,7 +26,7 @@ clap = { version = "4.6.0", features = ["derive", "env"] }
 env_logger = "0.11.10"
 futures = "0.3"
 log = { workspace = true }
-rumqttc = { version = "0.24", features = ["websocket"] }
+rumqttc = { version = "0.25", features = ["use-rustls", "websocket"] }
 serde = { workspace = true }
 serde_json = "1.0"
 tokio = { workspace = true }

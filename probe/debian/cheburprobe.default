@@ -1,0 +1,12 @@
+# Required: reporter id and token. You can request them at support@cheburcheck.ru.
+PROBE_ID=
+PROBE_TOKEN=
+
+# MQTT broker
+MQTT_HOST=wss://cheburcheck.ru/mqtt
+MQTT_PORT=443
+
+# Optional tuning.
+MQTT_CONNECTION_TIMEOUT_SECS=30
+MAX_CONCURRENT_TASKS=4
+RUST_LOG=info
