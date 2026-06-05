@@ -49,10 +49,10 @@ impl From<&str> for Target {
 
         if let Ok(url) = input.parse::<Url>() {
             if let Some(host) = url.host_str() {
-                return Target::Domain(host.to_string());
+                return Target::Domain(host.trim_end_matches('.').to_string());
             }
         }
-        Target::Domain(input.to_string())
+        Target::Domain(input.trim_end_matches('.').to_string())
     }
 }
 

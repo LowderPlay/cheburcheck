@@ -1,6 +1,7 @@
 <script lang="ts">
 import {
 	Activity,
+	EthernetPort,
 	Globe,
 	Hash,
 	Info,
@@ -11,6 +12,7 @@ import {
 	Server,
 	ShieldCheck,
 } from "@lucide/svelte";
+import type { CheckResult } from "$lib/api/check";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
@@ -18,31 +20,12 @@ import ResultStringList from "./result/ResultStringList.svelte";
 import ResultTargetCard from "./result/ResultTargetCard.svelte";
 
 type Provider = { name: string; networks: { cidr: string }[] };
-type AsnInfo = { prefixes: string[]; blockedPrefixes: string[] } | null;
 type ResultTheme = "blocked" | "clean" | "whitelist";
 
 let {
 	result,
 }: {
-	result: {
-		targetType: string;
-		target: string;
-		id?: string | null;
-		found: boolean;
-		blocked: boolean;
-		whitelist?: { lastOk?: string | null } | null;
-		domain?: string | null;
-		ips: string[];
-		subnetSize?: string | null;
-		geo: {
-			organisation?: string | null;
-			location: string;
-			asn?: string | null;
-		};
-		providers: Provider[];
-		blockedSubnets: string[];
-		asnInfo: AsnInfo;
-	};
+	result: CheckResult;
 } = $props();
 
 const valueClass = "text-right text-sm font-medium text-neutral-200";
@@ -110,6 +93,21 @@ const providerCidrs = (provider: Provider) =>
 				{#if !result.asnInfo}
 					<DetailRow label="IP-адреса" icon={Globe}>
 						<ResultIpList ips={result.ips} subnetSize={result.subnetSize} />
+					</DetailRow>
+				{/if}
+
+				{#if result.reverseLookup.length > 0}
+					<DetailRow label="Обратный DNS" icon={EthernetPort}>
+						{#each result.reverseLookup as ptr}
+							<span class={valueClass}>
+								<a
+									href={`/check?target=${ptr}`}
+									class="text-neutral-100 underline decoration-neutral-500 transition-all hover:text-white hover:decoration-neutral-100"
+								>
+									{ptr}
+								</a>
+							</span>
+						{/each}
 					</DetailRow>
 				{/if}
 

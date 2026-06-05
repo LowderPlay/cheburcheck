@@ -39,6 +39,7 @@ pub struct Check {
     pub verdict: CheckVerdict,
     pub geo: IpInfo,
     pub ips: Vec<IpAddr>,
+    pub reverse_lookup: Vec<String>,
     pub rkn_subnets: HashSet<IpNet>,
     pub asn_info: Option<asn::AsnInfo>,
 }
@@ -97,6 +98,19 @@ impl Checker {
                 return Err(CheckError::ResolveError(e));
             }
         };
+
+        let reverse_lookup = if let Some(ip) = ips.get(0).cloned() {
+            match self.resolver.lookup_ptr(ip).await {
+                Ok(ptr) => ptr,
+                Err(e) => {
+                    error!("ptr lookup error: {}", e);
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        };
+
         let geo_ip = self.geo_ip.load();
         let geo = match ips.get(0).map(|ip| geo_ip.lookup(ip.clone())) {
             None => IpInfo::default(),
@@ -194,6 +208,7 @@ impl Checker {
             rkn_subnets,
             geo,
             ips,
+            reverse_lookup,
             asn_info,
         })
     }

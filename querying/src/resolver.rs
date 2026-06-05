@@ -2,6 +2,7 @@ use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::net::{DnsError, NetError};
 use hickory_resolver::proto::ProtoError;
+use hickory_resolver::proto::rr::RData;
 use std::io::{Error, ErrorKind};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -63,16 +64,35 @@ impl Resolver {
             .resolver
             .lookup_ip(domain)
             .await
-            .map_err(|e| match e {
-                NetError::Dns(DnsError::NoRecordsFound(..)) => ResolveError::NxDomain,
-                NetError::Proto(ProtoError::Msg(msg))
-                    if msg.contains("Malformed label") || msg.contains("invalid characters") =>
-                {
-                    ResolveError::NxDomain
-                }
-                _ => ResolveError::Other(Error::new(ErrorKind::Other, e)),
-            })?
+            .map_err(map_resolve_error)?
             .iter()
             .collect())
+    }
+
+    pub async fn lookup_ptr(&self, ip: IpAddr) -> Result<Vec<String>, ResolveError> {
+        Ok(self
+            .resolver
+            .reverse_lookup(ip)
+            .await
+            .map_err(map_resolve_error)?
+            .answers()
+            .iter()
+            .filter_map(|record| match record.data() {
+                RData::PTR(ptr) => Some(ptr.to_string().trim_end_matches('.').to_string()),
+                _ => None,
+            })
+            .collect())
+    }
+}
+
+fn map_resolve_error(error: NetError) -> ResolveError {
+    match error {
+        NetError::Dns(DnsError::NoRecordsFound(..)) => ResolveError::NxDomain,
+        NetError::Proto(ProtoError::Msg(msg))
+            if msg.contains("Malformed label") || msg.contains("invalid characters") =>
+        {
+            ResolveError::NxDomain
+        }
+        _ => ResolveError::Other(Error::new(ErrorKind::Other, error)),
     }
 }
