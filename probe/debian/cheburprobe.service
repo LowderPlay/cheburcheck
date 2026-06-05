@@ -1,0 +1,16 @@
+[Unit]
+Description=Cheburcheck dynamic probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/default/cheburprobe
+ExecStart=/usr/bin/cheburprobe
+Restart=always
+RestartSec=5s
+DynamicUser=yes
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+[log]
+to = "console"
+level = "info"
+dir = "/var/log/rmqtt"
+file = "rmqtt.log"
+
+[plugins]
+dir = "rmqtt-plugins/"
+default_startups = [
+    "rmqtt-auth-http",
+    "rmqtt-retainer",
+]
+
+[listener.tcp.external]
+addr = "0.0.0.0:1883"
+allow_anonymous = false
+max_packet_size = "1MB"
+retain_available = true
+
+[listener.ws.external]
+addr = "0.0.0.0:8080"
+allow_anonymous = false
+max_packet_size = "1MB"
+retain_available = true
+
+[listener.tcp.internal]
+enable = true
+addr = "0.0.0.0:11883"
+allow_anonymous = false
+max_packet_size = "1MB"
+retain_available = true

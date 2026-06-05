@@ -1,0 +1,44 @@
+timeout_sec = 3
+min_data = 65536
+
+[[hosts]]
+id = "hil-hetzner" # hil-speed.hetzner.com
+host = "5.78.7.195"
+host_type = "Blacklist"
+file_path = "100MB.bin"
+
+[[hosts]]
+id = "hil-ovh" # hil.proof.ovh.us
+host = "51.81.154.196"
+host_type = "Blacklist"
+file_path = "files/1Mb.dat"
+
+[[hosts]]
+id = "sbg-ovh" # sbg.proof.ovh.net
+host = "51.91.75.40"
+host_type = "Blacklist"
+file_path = "files/1Mb.dat"
+
+[[hosts]]
+id = "fra-akamai" # speedtest.frankfurt.linode.com
+host = "139.162.130.8"
+host_type = "Blacklist"
+file_path = "100MB-frankfurt.bin"
+
+[[hosts]]
+id = "lon-akamai" # speedtest.london.linode.com
+host = "176.58.107.39"
+host_type = "Blacklist"
+file_path = "100MB-london.bin"
+
+[[hosts]]
+id = "msk1-selectel" # speedtest.selectel.ru
+host = "188.93.16.211"
+host_type = "Whitelist"
+file_path = "10MB"
+
+[[hosts]]
+id = "msk2-selectel" # speedtest-backend01.foxfordschool.com
+host = "31.128.51.92"
+host_type = "Whitelist"
+file_path = "api/download?bytes=100000"

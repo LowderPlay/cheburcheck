@@ -4,6 +4,7 @@ services:
     depends_on:
       - frontend
       - website
+      - rmqtt
     ports:
       - "${HTTP_PORT:-8080}:80"
     volumes:
@@ -28,5 +29,21 @@ services:
       ROCKET_ADDRESS: "::"
       ROCKET_PORT: 8000
       DATABASE_URL: "${DATABASE_URL}"
+      MQTT_ADMIN_TOKEN: "${MQTT_ADMIN_TOKEN}"
+      MQTT_HOST: rmqtt
+      MQTT_PORT: 11883
     expose:
       - "8000"
+
+  rmqtt:
+    image: docker.io/rmqtt/rmqtt:latest
+    depends_on:
+      - website
+    volumes:
+      - ./rmqtt/rmqtt.toml:/app/rmqtt/rmqtt.toml:ro
+      - ./rmqtt/rmqtt-plugins:/app/rmqtt/rmqtt-plugins:ro
+    expose:
+      - "8080"
+      - "1883"
+      - "11883"
+      - "6060"

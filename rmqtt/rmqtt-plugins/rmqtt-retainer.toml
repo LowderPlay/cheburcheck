@@ -1,0 +1,5 @@
+storage.type = "ram"
+
+max_retained_messages = 0
+max_payload_size = "1MB"
+retained_message_ttl = "0m"

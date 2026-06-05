@@ -3,6 +3,8 @@ extern crate rocket;
 mod agency;
 mod api;
 mod db;
+mod mqtt;
+mod mqtt_auth;
 mod whitelist;
 
 use env_logger::Env;
@@ -84,6 +86,7 @@ async fn rocket() -> _ {
         .parse()
         .unwrap_or(30);
     let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
+    let mqtt_publisher = mqtt::MqttPublisher::start_from_env();
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(
@@ -108,11 +111,13 @@ async fn rocket() -> _ {
         .manage(checker)
         .manage(pool)
         .manage(api_limiter)
+        .manage(mqtt_publisher)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount(
             "/api/v1",
             routes![
                 api::check,
+                api::probe_query,
                 api::healthcheck,
                 api::feedback,
                 api::get_system_status,
@@ -120,6 +125,7 @@ async fn rocket() -> _ {
             ],
         )
         .mount("/agency", routes![agency::upload_report])
+        .mount("/mqtt", routes![mqtt_auth::auth, mqtt_auth::acl])
         .mount("/whitelist", routes![whitelist::export_csv])
         .register("/", catchers![api_error])
 }

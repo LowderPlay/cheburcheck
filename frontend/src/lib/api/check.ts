@@ -23,6 +23,7 @@ type ApiCheckResponse = {
 	blocked: boolean;
 	rkn_domain?: string | null;
 	ips: string[];
+	reverse_lookup: string[];
 	blocked_subnets: string[];
 	cdn_providers: Record<string, ApiNetworkRecord[]>;
 	geo: {
@@ -46,6 +47,7 @@ export type CheckResult = {
 	whitelist?: { lastOk?: string | null } | null;
 	domain?: string | null;
 	ips: string[];
+	reverseLookup: string[];
 	subnetSize?: string | null;
 	geo: { organisation?: string | null; location: string; asn?: string | null };
 	providers: { name: string; networks: ApiNetworkRecord[] }[];
@@ -97,6 +99,7 @@ export async function fetchCheck(target: string): Promise<CheckResult> {
 			: null,
 		domain: data.rkn_domain,
 		ips: data.ips,
+		reverseLookup: data.reverse_lookup,
 		subnetSize: data.subnet_size,
 		geo: data.geo,
 		providers: Object.entries(data.cdn_providers).map(([name, networks]) => ({

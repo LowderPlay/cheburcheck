@@ -1,0 +1,23 @@
+http_timeout = "5s"
+
+disconnect_if_pub_rejected = true
+disconnect_if_expiry = false
+deny_if_error = true
+
+[http_headers]
+accept = "application/json"
+Cache-Control = "no-cache"
+User-Agent = "RMQTT/blocklist-check"
+Connection = "keep-alive"
+
+[http_auth_req]
+url = "http://website:8000/mqtt/auth"
+method = "post"
+headers = { content-type = "application/x-www-form-urlencoded" }
+params = { clientid = "%c", username = "%u", password = "%P", protocol = "%r" }
+
+[http_acl_req]
+url = "http://website:8000/mqtt/acl"
+method = "post"
+headers = { content-type = "application/x-www-form-urlencoded" }
+params = { access = "%A", username = "%u", clientid = "%c", ipaddr = "%a", topic = "%t", protocol = "%r" }

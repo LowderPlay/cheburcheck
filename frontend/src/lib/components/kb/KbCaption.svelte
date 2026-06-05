@@ -4,6 +4,8 @@ import type { Snippet } from "svelte";
 let { children }: { children: Snippet } = $props();
 </script>
 
-<i class="mt-6 mb-3 block text-center text-neutral-400">
+<p
+	class="mt-6 mb-4 text-center text-sm font-medium tracking-wide text-neutral-500 uppercase"
+>
 	{@render children()}
-</i>
+</p>

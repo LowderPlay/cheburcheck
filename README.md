@@ -44,6 +44,7 @@
 * `reporter` — [Cheburcheck Reporter](reporter/README.md)
 * `reports` — общий протокол для отправки отчетов
 * `website` — Rocket API и серверная логика
+* `probe` — [Cheburcheck Probe](probe/README.md)
 * `frontend` — SvelteKit SSR-интерфейс
 
 ---
@@ -63,7 +64,7 @@ HTTP_PORT=80 docker compose up --build
 
 Маршрутизация:
 
-* `/api/v1/*`, `/agency/*`, `/whitelist/*` и устаревший `/feedback/*` идут в Rocket
+* `/api/v1/*`, `/agency/*`, `/whitelist/*` идут в Rocket
 * остальные запросы идут в SvelteKit SSR
 
 ---
