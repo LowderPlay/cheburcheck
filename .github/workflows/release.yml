@@ -104,6 +104,11 @@ jobs:
               );
 
               for (const artifact of artifacts.filter((item) => !item.expired)) {
+                if (artifact.name.endsWith('.dockerbuild')) {
+                  core.info(`Skipping Docker build record artifact ${artifact.name}`);
+                  continue;
+                }
+
                 const archive = await github.rest.actions.downloadArtifact({
                   owner,
                   repo,
