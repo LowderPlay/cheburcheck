@@ -1,0 +1,154 @@
+name: Draft Release
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: draft-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    name: Draft GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect build artifacts
+        uses: actions/github-script@v8
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          WORKFLOWS: |
+            Build Rust Application
+            Build Probe
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tagName = process.env.TAG_NAME;
+            const workflows = process.env.WORKFLOWS
+              .split(/\r?\n/)
+              .map((name) => name.trim())
+              .filter(Boolean);
+            const targetSha = context.sha;
+            const outDir = path.join(process.cwd(), 'artifact-archives');
+            const pollDelayMs = 30_000;
+            const timeoutMs = 30 * 60 * 1000;
+
+            fs.mkdirSync(outDir, { recursive: true });
+
+            async function sleep(ms) {
+              return new Promise((resolve) => setTimeout(resolve, ms));
+            }
+
+            async function findWorkflowRun(workflowName) {
+              const startedAt = Date.now();
+
+              while (Date.now() - startedAt < timeoutMs) {
+                const runs = await github.paginate(
+                  github.rest.actions.listWorkflowRunsForRepo,
+                  {
+                    owner,
+                    repo,
+                    head_sha: targetSha,
+                    event: 'push',
+                    per_page: 100,
+                  },
+                );
+
+                const run = runs.find((candidate) =>
+                  candidate.name === workflowName &&
+                  candidate.head_sha === targetSha &&
+                  candidate.head_branch === tagName
+                );
+
+                if (run?.status === 'completed') {
+                  if (run.conclusion === 'success') {
+                    return run;
+                  }
+
+                  throw new Error(
+                    `${workflowName} completed with conclusion ${run.conclusion}: ${run.html_url}`,
+                  );
+                }
+
+                core.info(
+                  run
+                    ? `${workflowName} is ${run.status}; waiting for completion.`
+                    : `Waiting for ${workflowName} to start for ${tagName}.`,
+                );
+                await sleep(pollDelayMs);
+              }
+
+              throw new Error(`Timed out waiting for ${workflowName} on ${tagName}.`);
+            }
+
+            for (const workflowName of workflows) {
+              const run = await findWorkflowRun(workflowName);
+              core.info(`Downloading artifacts from ${workflowName}: ${run.html_url}`);
+
+              const artifacts = await github.paginate(
+                github.rest.actions.listWorkflowRunArtifacts,
+                {
+                  owner,
+                  repo,
+                  run_id: run.id,
+                  per_page: 100,
+                },
+              );
+
+              for (const artifact of artifacts.filter((item) => !item.expired)) {
+                const archive = await github.rest.actions.downloadArtifact({
+                  owner,
+                  repo,
+                  artifact_id: artifact.id,
+                  archive_format: 'zip',
+                });
+
+                const artifactPath = path.join(outDir, `${artifact.name}.zip`);
+                fs.writeFileSync(artifactPath, Buffer.from(archive.data));
+                core.info(`Saved ${artifactPath}`);
+              }
+            }
+
+      - name: Extract release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-artifacts
+
+          for archive in artifact-archives/*.zip; do
+            artifact_name="$(basename "$archive" .zip)"
+            extract_dir="$(mktemp -d)"
+
+            unzip -q "$archive" -d "$extract_dir"
+
+            while IFS= read -r -d '' file; do
+              filename="$(basename "$file")"
+              target="release-artifacts/$filename"
+
+              if [ -e "$target" ]; then
+                target="release-artifacts/${artifact_name}-${filename}"
+              fi
+
+              mv "$file" "$target"
+            done < <(find "$extract_dir" -type f -print0)
+
+            rm -rf "$extract_dir"
+          done
+
+      - name: Publish draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: release-artifacts/*
