@@ -16,6 +16,7 @@ use rocket::State;
 use rocket::http::Status;
 use rocket::response::stream::{Event, EventStream};
 use rocket::serde::json::Json;
+use rocket::serde::json::serde_json::Value;
 use rocket::serde::json::serde_json::json;
 use rocket::tokio::sync::RwLock;
 use rocket::tokio::time;
@@ -204,6 +205,7 @@ pub async fn probe_query(
     let online_probes = mqtt.online_probe_count().await;
     let probe_config = mqtt.probe_config();
     let pool = pool.inner().clone();
+    let query_id = id;
     let id = id.to_string();
     Ok(EventStream! {
         let mut responded_probes = HashSet::new();
@@ -241,7 +243,11 @@ pub async fn probe_query(
                                     None
                                 }
                             };
-                            yield Event::data(build_probe_response(result, &probe_config, reporter_info).to_string()).event("result");
+                            let response = build_probe_response(result, &probe_config, reporter_info);
+                            if let Err(error) = insert_probe_report(query_id, &response, &pool).await {
+                                warn!("api: failed to save probe report for query {id}: {error}");
+                            }
+                            yield Event::data(response.to_string()).event("result");
                         }
                         Err(rocket::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             continue;
@@ -269,7 +275,7 @@ pub fn build_probe_response(
     raw: ProbeResultEvent,
     config: &ProbeConfig,
     reporter_info: Option<ProbeReporterInfo>,
-) -> rocket::serde::json::Value {
+) -> Value {
     let hosts: HashMap<&String, &Host> = config.hosts.iter().map(|h| (&h.id, h)).collect();
     let verdict = build_probe_verdict(&raw.host_results, config);
     let region = reporter_info.as_ref().and_then(|info| info.region.as_ref());
@@ -300,6 +306,46 @@ pub fn build_probe_response(
         "verdict": verdict,
         "host_results": host_results,
     })
+}
+
+async fn insert_probe_report(
+    query_id: Uuid,
+    response: &Value,
+    pool: &PgPool,
+) -> Result<(), sqlx::Error> {
+    let probe_id = response
+        .get("probe_id")
+        .and_then(Value::as_str)
+        .and_then(|probe_id| probe_id.parse::<i32>().ok());
+    let verdict = response
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("uncertain");
+
+    let Some(probe_id) = probe_id else {
+        warn!("api: ignoring probe report with non-numeric probe_id");
+        return Ok(());
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO probe_reports (query_id, probe_id, verdict, result)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (query_id, probe_id)
+        DO UPDATE SET
+            date = NOW(),
+            verdict = EXCLUDED.verdict,
+            result = EXCLUDED.result
+        "#,
+    )
+    .bind(query_id)
+    .bind(probe_id)
+    .bind(verdict)
+    .bind(response)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 async fn fetch_probe_reporter_info(

@@ -23,14 +23,14 @@ let {
 	{#if asnStats}
 		<div class="pt-4 border-t border-neutral-800 grid grid-cols-2 gap-4">
 			<div>
-				<div class="text-[10px] text-neutral-500 uppercase font-bold mb-0.5">
+				<div class="text-xs text-neutral-500 uppercase font-bold mb-0.5">
 					Всего подсетей
 				</div>
 				<div class="text-lg font-bold text-white">{asnStats.total}</div>
 			</div>
 			<div>
 				<div
-					class="text-[10px] uppercase font-bold mb-0.5 {asnStats.blocked > 0 ? 'text-red-500/70' : 'text-green-500/70'}"
+					class="text-xs uppercase font-bold mb-0.5 {asnStats.blocked > 0 ? 'text-red-500/70' : 'text-green-500/70'}"
 				>
 					Заблокировано
 				</div>
