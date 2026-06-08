@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Collect build artifacts
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           TAG_NAME: ${{ github.ref_name }}
           WORKFLOWS: |
