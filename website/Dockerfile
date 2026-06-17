@@ -29,7 +29,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends libssl3 ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --system app && \
-    useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
+    useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app && \
+    mkdir -p /var/cache/cheburcheck/databases && \
+    chown -R app:app /var/cache/cheburcheck
 
 COPY --from=build /build/website/Rocket.toml ./
 COPY --from=build /build/main ./

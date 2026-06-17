@@ -35,7 +35,7 @@ services:
       MQTT_HOST: rmqtt
       MQTT_PORT: 11883
     volumes:
-      - ./database-cache:/var/cache/cheburcheck/databases
+      - database-cache:/var/cache/cheburcheck/databases
     expose:
       - "8000"
 
@@ -51,3 +51,6 @@ services:
       - "1883"
       - "11883"
       - "6060"
+
+volumes:
+  database-cache:
