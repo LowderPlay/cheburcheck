@@ -67,6 +67,11 @@ HTTP_PORT=80 docker compose up --build
 * `/api/v1/*`, `/agency/*`, `/whitelist/*` идут в Rocket
 * остальные запросы идут в SvelteKit SSR
 
+Базы проверок кешируются в `database-cache/`. Путь можно изменить через
+`DATABASE_CACHE_DIR`, основной интервал обновления — через
+`DATABASE_INTERVAL_SECONDS`, а интервал повтора после ошибки скачивания — через
+`DATABASE_RETRY_INTERVAL_SECONDS` (по умолчанию 300 секунд).
+
 ---
 
 ## Вклад

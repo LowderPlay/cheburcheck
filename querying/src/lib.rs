@@ -16,6 +16,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 pub mod asn;
+pub mod cache;
 pub mod geoip;
 pub mod lists;
 pub mod resolver;
