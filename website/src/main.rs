@@ -2,23 +2,20 @@
 extern crate rocket;
 mod agency;
 mod api;
+mod database_refresh;
 mod db;
 mod mqtt;
 mod mqtt_auth;
 mod whitelist;
 
 use env_logger::Env;
-use log::{LevelFilter, error, info};
-use querying::Checker;
+use log::{LevelFilter, error};
 use rocket::fairing::AdHoc;
 use rocket::http::Status;
 use rocket::serde::json::Json;
-use rocket::tokio::sync::RwLock;
-use rocket::tokio::time;
-use rocket::{Build, Request, Rocket, fairing, tokio};
+use rocket::{Build, Request, Rocket, fairing};
 use serde::Serialize;
 use sqlx::postgres::PgPool;
-use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Serialize)]
@@ -55,31 +52,7 @@ async fn rocket() -> _ {
         .filter_module("querying", LevelFilter::Info)
         .init();
 
-    let mut interval = time::interval(Duration::from_secs(
-        std::env::var("DATABASE_INTERVAL_SECONDS")
-            .unwrap_or("21600".to_string())
-            .parse()
-            .unwrap(),
-    ));
-
-    let checker = Arc::new(RwLock::new(Checker::new().await));
-
-    let checker_clone = checker.clone();
-    tokio::spawn(async move {
-        info!("Refreshing DB every {:?}", interval.period());
-        loop {
-            interval.tick().await;
-            info!("Updating all DBs");
-            match Checker::download_all().await {
-                Ok(bases) => {
-                    info!("Downloaded, updating...");
-                    checker_clone.read().await.update_all(bases).await;
-                    info!("Updated databases");
-                }
-                Err(_) => log::error!("Failed to download all DBs"),
-            }
-        }
-    });
+    let checker = database_refresh::start().await;
 
     let rate_limit_rpm: u32 = std::env::var("API_RATE_LIMIT_RPM")
         .unwrap_or("30".to_string())

@@ -29,9 +29,13 @@ services:
       ROCKET_ADDRESS: "::"
       ROCKET_PORT: 8000
       DATABASE_URL: "${DATABASE_URL}"
+      DATABASE_CACHE_DIR: /var/cache/cheburcheck/databases
+      DATABASE_RETRY_INTERVAL_SECONDS: "${DATABASE_RETRY_INTERVAL_SECONDS:-300}"
       MQTT_ADMIN_TOKEN: "${MQTT_ADMIN_TOKEN}"
       MQTT_HOST: rmqtt
       MQTT_PORT: 11883
+    volumes:
+      - ./database-cache:/var/cache/cheburcheck/databases
     expose:
       - "8000"
 
