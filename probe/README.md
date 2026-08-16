@@ -104,6 +104,7 @@ cargo run --package probe --bin cheburprobe
 
 ```shell
 docker run --rm \
+  --cap-add NET_RAW \
   -e PROBE_ID=1 \
   -e PROBE_TOKEN=ваш-токен \
   -e MQTT_HOST=wss://cheburcheck.ru/mqtt \
@@ -121,9 +122,10 @@ docker run --rm \
 | `--probe-id`, `PROBE_ID` | ID сканера. | обязательно |
 | `--probe-token`, `PROBE_TOKEN` | Секретный токен сканера. | обязательно |
 | `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `8` |
+| `--traceroute-max-hops`, `TRACEROUTE_MAX_HOPS` | Максимальный TTL для TCP traceroute. | `5` |
 | `RUST_LOG` | Уровень логирования. | `info` |
 
-`MAX_CONCURRENT_TASKS` должен быть больше нуля.
+`MAX_CONCURRENT_TASKS` и `TRACEROUTE_MAX_HOPS` должны быть больше нуля. Для получения ICMP-ответов traceroute процессу требуется capability `CAP_NET_RAW`; systemd unit и Docker-образ настраивают её автоматически.
 
 ## Как работает проверка
 
@@ -131,8 +133,8 @@ docker run --rm \
 
 1. публикует retained-статус `online` в MQTT;
 2. подписывается на конфигурацию динамического сканирования;
-3. получает задания на проверку доменов;
-4. параллельно проверяет домен на настроенных тестовых хостах;
+3. получает задания на проверку доменов и IP-адресов;
+4. параллельно запускает SNI-проверки (для доменов), TCP traceroute до цели и контрольный TCP traceroute;
 5. отправляет результат обратно в Cheburcheck.
 
 Для каждого тестового хоста сканер открывает TCP-соединение, начинает TLS-handshake с проверяемым доменом в SNI, затем отправляет простой HTTP GET-запрос.

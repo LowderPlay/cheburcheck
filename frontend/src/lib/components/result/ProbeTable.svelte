@@ -49,6 +49,13 @@ const verdictStyles = {
 		bg: "bg-red-500/10",
 		border: "border-red-500/20",
 	},
+	tspu_block: {
+		icon: CircleX,
+		text: "ТСПУ Блок",
+		class: "text-red-500",
+		bg: "bg-red-500/10",
+		border: "border-red-500/20",
+	},
 	whitelist: {
 		icon: ShieldCheck,
 		text: "Белый список",
@@ -84,10 +91,10 @@ const verdictStyles = {
 				<span
 					class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
 				></span>
-				Сканеров онлайн: {status.online_probes}
+				Сканеров онлайн:{status.online_probes}
 			</div>
 			<div class="flex items-center gap-1">
-				Получено ответов: {probes.length} / {status.online_probes}
+				Получено ответов:{probes.length} /{status.online_probes}
 			</div>
 		</div>
 	</div>
@@ -123,13 +130,12 @@ const verdictStyles = {
 				</thead>
 				<tbody>
 					{#each probes as probe (probe.probe_id)}
-						{@const style = verdictStyles[(isStaticBlocked && probe.verdict === "ok") ? "cdn_block" : probe.verdict]}
+						{@const style = verdictStyles[(isStaticBlocked && probe.host_results?.length !== 0 && probe.verdict === "ok") ? "cdn_block" : probe.verdict]}
 						{@const isExpanded = !!expandedRows[probe.probe_id]}
 						<tr
 							class="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors cursor-pointer select-none"
 							onclick={() => toggleRow(probe.probe_id)}
 							onkeydown={(e) => e.key === 'Enter' && toggleRow(probe.probe_id)}
-							role="button"
 							tabindex="0"
 						>
 							<td class="p-3">
@@ -160,6 +166,11 @@ const verdictStyles = {
 						{#if isExpanded}
 							<tr class="bg-neutral-900/30">
 								<td colspan="4" class="p-4 border-b border-neutral-800/50">
+									<div class="text-md text-neutral-200 mb-2">
+										Блокировка на ТСПУ<b>
+											{probe.verdict === "tspu_block" ? ` обнаружена после ${probe.target_hop} прыжка` : " не обнаружена"}
+										</b>
+									</div>
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 										{#each probe.host_results as host}
 											<div
@@ -167,7 +178,7 @@ const verdictStyles = {
 											>
 												<div class="flex flex-col">
 													<span class="text-xs font-bold text-neutral-400">
-														Сервер {host.host_id}
+														Сервер{host.host_id}
 														({host.host === "Blacklist" ? "в заблокированных" : "в доступных"} диапазонах)
 													</span>
 													<span class="text-xs text-neutral-200">
@@ -176,7 +187,7 @@ const verdictStyles = {
 														{:else if host.probe_evidence.type === 'ClientHello'}
 															Блокировка после ClientHello
 														{:else if host.probe_evidence.type === 'DataTimeout'}
-															Таймаут получения данных, получено {host.probe_evidence.bytes} байт
+															Таймаут получения данных, получено{host.probe_evidence.bytes} байт
 														{:else if host.probe_evidence.type === 'ConnectionError'}
 															Ошибка подключения
 														{/if}

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProbeStatus<'a> {
@@ -13,6 +14,8 @@ pub struct ProbeConfig {
     pub task_timeout_ms: u64,
     pub published_at: String,
     pub hosts: Vec<Host>,
+    #[serde(default)]
+    pub control_hosts: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -35,7 +38,8 @@ pub enum HostType {
 pub struct ProbeTask<'a> {
     pub id: String,
     pub query_id: String,
-    pub target: &'a str,
+    pub domain: Option<&'a str>,
+    pub ip: IpAddr,
     pub created_at: String,
     pub timeout_ms: u64,
 }
@@ -45,6 +49,30 @@ pub struct ProbeResultEvent {
     pub job_id: String,
     pub probe_id: String,
     pub host_results: Vec<HostProbeResult>,
+    pub target_traceroute: Option<TcpTracerouteResult>,
+    pub control_traceroute: Option<TcpTracerouteResult>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ProbeResult {
+    pub responses: Option<Vec<HostProbeResult>>,
+    pub target_traceroute: Option<TcpTracerouteResult>,
+    pub control_traceroute: Option<TcpTracerouteResult>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TcpTracerouteResult {
+    pub target: IpAddr,
+    pub result: TcpTracerouteOutcome,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TcpTracerouteOutcome {
+    Rst { hop: u8 },
+    Connected { hop: u8 },
+    IcmpTimeExceeded { hop: u8 },
+    Timeout,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

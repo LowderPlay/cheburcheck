@@ -98,6 +98,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -804,6 +810,15 @@ dependencies = [
  "cfg-if",
  "home",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "etherparse"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17304d06addb3283cdc4bd528e42dd95e73c8ee2d6492ffce415e93660885449"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -2532,6 +2547,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "polling"
+version = "3.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d0e4f59085d47d8241c88ead0f274e8a0cb551f3625263c05eb8dd897c34218"
+dependencies = [
+ "cfg-if",
+ "concurrent-queue",
+ "hermit-abi",
+ "pin-project-lite",
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2603,18 +2632,23 @@ dependencies = [
 
 [[package]]
 name = "probe"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "etherparse",
  "futures",
  "log",
+ "polling",
+ "rand 0.8.5",
  "reports",
  "rumqttc 0.25.1",
+ "rustix",
  "rustls 0.23.35",
  "serde",
  "serde_json",
+ "socket2 0.6.3",
  "tokio",
  "tokio-rustls 0.26.4",
 ]
@@ -4671,7 +4705,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "dotenvy",
  "env_logger",

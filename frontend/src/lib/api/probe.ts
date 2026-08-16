@@ -17,8 +17,9 @@ export type ProbeResult = {
 	region?: string | null;
 	provider?: string | null;
 	asn?: string | null;
-	verdict: "uncertain" | "sni_block" | "whitelist" | "ok";
-	host_results: ProbeHostResult[];
+	verdict: "uncertain" | "sni_block" | "tspu_block" | "whitelist" | "ok";
+	host_results: ProbeHostResult[] | null;
+	target_hop: number | null;
 };
 
 export type ProbeStatus = {

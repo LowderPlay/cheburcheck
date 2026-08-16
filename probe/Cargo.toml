@@ -1,6 +1,6 @@
 [package]
 name = "probe"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license-file = "../LICENSE"
 description = "Dynamic network probe daemon for Cheburcheck"
@@ -25,8 +25,11 @@ assets = [
 anyhow = "1.0"
 clap = { version = "4.6.0", features = ["derive", "env"] }
 env_logger = "0.11.10"
+etherparse = "0.21"
 futures = "0.3"
 log = { workspace = true }
+polling = "3.11"
+rustix = { version = "1.1", features = ["net"] }
 rumqttc = { version = "0.25", features = ["use-rustls", "websocket"] }
 serde = { workspace = true }
 serde_json = "1.0"
@@ -34,3 +37,5 @@ tokio = { workspace = true }
 reports = { path = "../reports" }
 rustls = "0.23"
 tokio-rustls = "0.26"
+rand = "0.8"
+socket2 = { version = "0.6", features = ["all"] }

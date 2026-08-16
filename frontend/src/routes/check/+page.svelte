@@ -31,9 +31,7 @@ const checkQuery = createQuery(() => ({
 }));
 
 const queryId = $derived(checkQuery.data?.id);
-const shouldProbe = $derived(
-	!!queryId && checkQuery.data?.targetType === "Домен",
-);
+const shouldProbe = $derived(!!queryId);
 
 function createInitialProbeData(id: string): ProbeQueryData {
 	return {
