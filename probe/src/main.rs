@@ -3,9 +3,10 @@ mod traceroute;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use futures::future::join_all;
 use log::{error, info, warn};
 use rand::seq::SliceRandom;
-use reports::probe::{ProbeConfig, ProbeResult, ProbeStatus, ProbeTask};
+use reports::probe::{ProbeConfig, ProbeResult, ProbeStatus, ProbeTask, TcpTracerouteOutcome};
 use rumqttc::{
     AsyncClient, Event, Incoming, LastWill, MqttOptions, NetworkOptions, QoS, Transport,
 };
@@ -47,6 +48,12 @@ struct Args {
 
     #[arg(long, env = "TRACEROUTE_MAX_HOPS", default_value_t = 5)]
     traceroute_max_hops: u8,
+
+    #[arg(long, env = "TRACEROUTE_RETRIES", default_value_t = 3)]
+    traceroute_retries: u8,
+
+    #[arg(long, env = "TRACEROUTE_CONTROL_HOSTS", default_value_t = 3)]
+    traceroute_control_hosts: usize,
 }
 
 #[tokio::main]
@@ -58,6 +65,12 @@ async fn main() -> Result<()> {
     }
     if args.traceroute_max_hops == 0 {
         bail!("traceroute_max_hops must be greater than zero");
+    }
+    if args.traceroute_retries == 0 {
+        bail!("traceroute_retries must be greater than zero");
+    }
+    if args.traceroute_control_hosts == 0 {
+        bail!("traceroute_control_hosts must be greater than zero");
     }
 
     let status_topic = format!("probe/status/v1/{}", args.probe_id);
@@ -258,19 +271,21 @@ async fn handle_task(
 
     let result_topic = format!("probe/results/v1/{job_id}/{}", args.probe_id);
     let config = config.read().await.clone();
-    let control_target = config.as_ref().and_then(|config| {
+    let control_targets = config.as_ref().map_or_else(Vec::new, |config| {
         let mut rng = rand::thread_rng();
         match task.ip {
             IpAddr::V4(_) => config
                 .control_hosts_v4
-                .choose(&mut rng)
+                .choose_multiple(&mut rng, args.traceroute_control_hosts)
                 .copied()
-                .map(IpAddr::V4),
+                .map(IpAddr::V4)
+                .collect(),
             IpAddr::V6(_) => config
                 .control_hosts_v6
-                .choose(&mut rng)
+                .choose_multiple(&mut rng, args.traceroute_control_hosts)
                 .copied()
-                .map(IpAddr::V6),
+                .map(IpAddr::V6)
+                .collect(),
         }
     });
     let sni_check = sni::check_sni(
@@ -280,12 +295,21 @@ async fn handle_task(
         job_id,
         task.timeout_ms,
     );
-    let target_traceroute = traceroute::tcp_traceroute(task.ip, args.traceroute_max_hops);
+    let target_traceroute =
+        traceroute::tcp_traceroute(task.ip, args.traceroute_max_hops, args.traceroute_retries);
     let control_traceroute = async {
-        match control_target {
-            Some(target) => traceroute::tcp_traceroute(target, args.traceroute_max_hops).await,
-            None => None,
-        }
+        join_all(control_targets.into_iter().map(|target| {
+            traceroute::tcp_traceroute(target, args.traceroute_max_hops, args.traceroute_retries)
+        }))
+        .await
+        .into_iter()
+        .flatten()
+        .min_by_key(|trace| match trace.result {
+            TcpTracerouteOutcome::Rst { hop }
+            | TcpTracerouteOutcome::Connected { hop }
+            | TcpTracerouteOutcome::IcmpTimeExceeded { hop } => hop,
+            TcpTracerouteOutcome::Timeout => u8::MAX,
+        })
     };
     let (responses, target_traceroute, control_traceroute) =
         tokio::join!(sni_check, target_traceroute, control_traceroute);

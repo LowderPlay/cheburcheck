@@ -180,7 +180,9 @@ const verdictStyles = {
 										</div>
 									{:else}
 										<div class="text-md text-neutral-200 mb-2">
-											Блокировка на ТСПУ <b>не обнаружена</b>
+											Блокировка на ТСПУ <b>не обнаружена</b> после
+											{probe.target_hop}
+											прыжков
 										</div>
 									{/if}
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -200,7 +202,8 @@ const verdictStyles = {
 														{:else if host.probe_evidence.type === 'ClientHello'}
 															Блокировка после ClientHello
 														{:else if host.probe_evidence.type === 'DataTimeout'}
-															Таймаут получения данных, получено{host.probe_evidence.bytes}
+															Таймаут получения данных, получено
+															{host.probe_evidence.bytes}
 															байт
 														{:else if host.probe_evidence.type === 'ConnectionError'}
 															Ошибка подключения
