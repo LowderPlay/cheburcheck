@@ -8,6 +8,7 @@ import {
 	CircleX,
 	LoaderCircle,
 	ShieldCheck,
+	TriangleAlert,
 } from "@lucide/svelte";
 import type { ProbeResult, ProbeStatus } from "$lib/api/probe";
 
@@ -166,11 +167,22 @@ const verdictStyles = {
 						{#if isExpanded}
 							<tr class="bg-neutral-900/30">
 								<td colspan="4" class="p-4 border-b border-neutral-800/50">
-									<div class="text-md text-neutral-200 mb-2">
-										Блокировка на ТСПУ<b>
-											{probe.verdict === "tspu_block" ? ` обнаружена после ${probe.target_hop} прыжка` : " не обнаружена"}
-										</b>
-									</div>
+									{#if probe.verdict === "tspu_block"}
+										<div
+											class="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/15 px-3 py-2 text-red-200"
+										>
+											<TriangleAlert size={18} class="shrink-0 text-red-400" />
+											<span class="font-bold">
+												Блокировка ТСПУ обнаружена после
+												{probe.target_hop}
+												прыжка
+											</span>
+										</div>
+									{:else}
+										<div class="text-md text-neutral-200 mb-2">
+											Блокировка на ТСПУ <b>не обнаружена</b>
+										</div>
+									{/if}
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 										{#each probe.host_results as host}
 											<div
