@@ -91,10 +91,10 @@ const verdictStyles = {
 				<span
 					class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
 				></span>
-				Сканеров онлайн:{status.online_probes}
+				Сканеров онлайн: {status.online_probes}
 			</div>
 			<div class="flex items-center gap-1">
-				Получено ответов:{probes.length} /{status.online_probes}
+				Получено ответов: {probes.length} / {status.online_probes}
 			</div>
 		</div>
 	</div>
@@ -178,8 +178,9 @@ const verdictStyles = {
 											>
 												<div class="flex flex-col">
 													<span class="text-xs font-bold text-neutral-400">
-														Сервер{host.host_id}
-														({host.host === "Blacklist" ? "в заблокированных" : "в доступных"} диапазонах)
+														Сервер {host.host_id}
+														({host.host === "Blacklist" ? "в заблокированных" : "в доступных"}
+														диапазонах)
 													</span>
 													<span class="text-xs text-neutral-200">
 														{#if host.probe_evidence.type === 'Good'}
@@ -187,7 +188,8 @@ const verdictStyles = {
 														{:else if host.probe_evidence.type === 'ClientHello'}
 															Блокировка после ClientHello
 														{:else if host.probe_evidence.type === 'DataTimeout'}
-															Таймаут получения данных, получено{host.probe_evidence.bytes} байт
+															Таймаут получения данных, получено{host.probe_evidence.bytes}
+															байт
 														{:else if host.probe_evidence.type === 'ConnectionError'}
 															Ошибка подключения
 														{/if}

@@ -34,6 +34,7 @@ services:
       MQTT_ADMIN_TOKEN: "${MQTT_ADMIN_TOKEN}"
       MQTT_HOST: rmqtt
       MQTT_PORT: 11883
+      PROBE_RATE_LIMIT_RPM: "${PROBE_RATE_LIMIT_RPM:-30}"
     volumes:
       - database-cache:/var/cache/cheburcheck/databases
     expose:

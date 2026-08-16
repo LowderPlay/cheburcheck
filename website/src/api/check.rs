@@ -45,7 +45,7 @@ pub async fn check(
     pool: &State<PgPool>,
     limiter: &State<Arc<ApiRateLimiter>>,
 ) -> Result<Json<ApiCheckResponse>, Status> {
-    if limiter.check_key(&addr.ip).is_err() {
+    if !limiter.check(&addr.ip) {
         return Err(Status::TooManyRequests);
     }
 

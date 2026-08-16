@@ -1,4 +1,4 @@
-use super::rate_limit::ApiRateLimiter;
+use super::rate_limit::ProbeRateLimiter;
 use crate::mqtt::{MqttPublisher, PublishError};
 use log::warn;
 use querying::target::Target;
@@ -32,9 +32,9 @@ pub async fn probe_query(
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
     mqtt: &State<MqttPublisher>,
-    limiter: &State<Arc<ApiRateLimiter>>,
+    limiter: &State<Arc<ProbeRateLimiter>>,
 ) -> Result<EventStream![Event], Status> {
-    if limiter.check_key(&addr.ip).is_err() {
+    if !limiter.check(&addr.ip) {
         return Err(Status::TooManyRequests);
     }
 
@@ -59,6 +59,9 @@ pub async fn probe_query(
         .first()
         .and_then(|ip| ip.parse::<IpAddr>().ok())
         .ok_or(Status::BadRequest)?;
+    if Target::is_bogon(ip) {
+        return Err(Status::Forbidden);
+    }
 
     let mut results = mqtt.subscribe_probe_results(id).await.map_err(|error| {
         warn!("api: failed to subscribe to probe results for {id}: {error}");

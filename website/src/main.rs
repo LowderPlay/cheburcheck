@@ -58,7 +58,12 @@ async fn rocket() -> _ {
         .unwrap_or("30".to_string())
         .parse()
         .unwrap_or(30);
+    let probe_rate_limit_rpm: u32 = std::env::var("PROBE_RATE_LIMIT_RPM")
+        .unwrap_or("5".to_string())
+        .parse()
+        .unwrap_or(5);
     let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
+    let probe_limiter = std::sync::Arc::new(api::build_probe_rate_limiter(probe_rate_limit_rpm));
     let mqtt_publisher = mqtt::MqttPublisher::start_from_env();
 
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -84,6 +89,7 @@ async fn rocket() -> _ {
         .manage(checker)
         .manage(pool)
         .manage(api_limiter)
+        .manage(probe_limiter)
         .manage(mqtt_publisher)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount(

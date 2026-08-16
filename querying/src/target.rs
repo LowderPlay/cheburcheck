@@ -57,6 +57,36 @@ impl From<&str> for Target {
 }
 
 impl Target {
+    pub fn is_bogon(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ip) => {
+                let [a, b, c, d] = ip.octets();
+                a == 0
+                    || a == 10
+                    || a == 127
+                    || (a == 100 && (64..=127).contains(&b))
+                    || (a == 169 && b == 254)
+                    || (a == 172 && (16..=31).contains(&b))
+                    || (a == 192 && b == 0 && c == 0 && d != 9 && d != 10)
+                    || (a == 192 && b == 0 && c == 2)
+                    || (a == 192 && b == 88 && c == 99)
+                    || (a == 192 && b == 168)
+                    || (a == 198 && (b == 18 || b == 19))
+                    || (a == 198 && b == 51 && c == 100)
+                    || (a == 203 && b == 0 && c == 113)
+                    || a >= 224
+            }
+            IpAddr::V6(ip) => {
+                let segments = ip.segments();
+                let first = segments[0];
+                first & 0xe000 != 0x2000
+                    || (first == 0x2001 && segments[1] < 0x0200)
+                    || (first == 0x2001 && segments[1] == 0x0db8)
+                    || (first == 0x3fff && segments[1] < 0x1000)
+            }
+        }
+    }
+
     pub fn readable_type(&self) -> &'static str {
         match self {
             Target::Domain(_) => "Домен",
@@ -153,5 +183,36 @@ fn format_large_number(n: u128) -> String {
         format!("{:.1}E", n as f64 / 1_000_000_000_000_000_000.0)
     } else {
         format!("{:.1}Z", n as f64 / 1_000_000_000_000_000_000_000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifies_bogon_addresses() {
+        for address in [
+            "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "192.0.2.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "::1",
+            "2001:db8::1",
+            "fc00::1",
+            "fe80::1",
+        ] {
+            assert!(Target::is_bogon(address.parse().unwrap()), "{address}");
+        }
+    }
+
+    #[test]
+    fn accepts_public_addresses() {
+        for address in ["1.1.1.1", "8.8.8.8", "2001:4860:4860::8888"] {
+            assert!(!Target::is_bogon(address.parse().unwrap()), "{address}");
+        }
     }
 }
