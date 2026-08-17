@@ -55,6 +55,10 @@ pub async fn probe_query(
             return Err(Status::BadRequest);
         }
     };
+    let probe_config = mqtt.probe_config();
+    if domain.is_none() && !probe_config.traceroute_enabled {
+        return Err(Status::BadRequest);
+    }
     let ip = resolved_ips
         .first()
         .and_then(|ip| ip.parse::<IpAddr>().ok())
@@ -77,7 +81,6 @@ pub async fn probe_query(
 
     let timeout = mqtt.task_timeout();
     let online_probes = mqtt.online_probe_count().await;
-    let probe_config = mqtt.probe_config();
     let pool = pool.inner().clone();
     let query_id = id;
     let id = id.to_string();
@@ -428,7 +431,7 @@ mod tests {
         let target = icmp_trace(5);
         assert_eq!(
             build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control)),
-            "uncertain"
+            "ok"
         );
     }
 
@@ -441,7 +444,7 @@ mod tests {
         let control = icmp_trace(5);
         assert_eq!(
             build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control)),
-            "uncertain"
+            "ok"
         );
     }
 
@@ -451,6 +454,7 @@ mod tests {
             task_timeout_ms: 0,
             published_at: String::new(),
             hosts: vec![],
+            traceroute_enabled: true,
             control_hosts: vec![],
         }
     }

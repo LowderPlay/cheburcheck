@@ -98,16 +98,18 @@ const providerCidrs = (provider: Provider) =>
 
 				{#if result.reverseLookup.length > 0}
 					<DetailRow label="Обратный DNS" icon={EthernetPort}>
-						{#each result.reverseLookup as ptr}
-							<span class={valueClass}>
-								<a
-									href={`/check?target=${ptr}`}
-									class="text-neutral-100 underline decoration-neutral-500 transition-all hover:text-white hover:decoration-neutral-100"
-								>
-									{ptr}
-								</a>
-							</span>
-						{/each}
+						<div class="flex w-full flex-col items-end gap-2">
+							{#each result.reverseLookup as ptr}
+								<span class={valueClass}>
+									<a
+										href={`/check?target=${ptr}`}
+										class="text-neutral-100 underline decoration-neutral-500 transition-all hover:text-white hover:decoration-neutral-100"
+									>
+										{ptr}
+									</a>
+								</span>
+							{/each}
+						</div>
 					</DetailRow>
 				{/if}
 

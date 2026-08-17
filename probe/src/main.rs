@@ -186,21 +186,23 @@ async fn update_config(
     let value: ProbeConfig = serde_json::from_slice(payload).context("decode probe config")?;
     let mut control_hosts_v4 = HashSet::new();
     let mut control_hosts_v6 = HashSet::new();
-    for domain in &value.control_hosts {
-        match tokio::net::lookup_host((domain.as_str(), 443)).await {
-            Ok(addresses) => {
-                for address in addresses {
-                    match address.ip() {
-                        IpAddr::V4(address) => {
-                            control_hosts_v4.insert(address);
-                        }
-                        IpAddr::V6(address) => {
-                            control_hosts_v6.insert(address);
+    if value.traceroute_enabled {
+        for domain in &value.control_hosts {
+            match tokio::net::lookup_host((domain.as_str(), 443)).await {
+                Ok(addresses) => {
+                    for address in addresses {
+                        match address.ip() {
+                            IpAddr::V4(address) => {
+                                control_hosts_v4.insert(address);
+                            }
+                            IpAddr::V6(address) => {
+                                control_hosts_v6.insert(address);
+                            }
                         }
                     }
                 }
+                Err(error) => warn!("failed to resolve control host {domain}: {error}"),
             }
-            Err(error) => warn!("failed to resolve control host {domain}: {error}"),
         }
     }
     *config.write().await = Some(LoadedProbeConfig {
@@ -271,7 +273,13 @@ async fn handle_task(
 
     let result_topic = format!("probe/results/v1/{job_id}/{}", args.probe_id);
     let config = config.read().await.clone();
+    let traceroute_enabled = config
+        .as_ref()
+        .is_some_and(|config| config.config.traceroute_enabled);
     let control_targets = config.as_ref().map_or_else(Vec::new, |config| {
+        if !traceroute_enabled {
+            return Vec::new();
+        }
         let mut rng = rand::thread_rng();
         match task.ip {
             IpAddr::V4(_) => config
@@ -295,8 +303,14 @@ async fn handle_task(
         job_id,
         task.timeout_ms,
     );
-    let target_traceroute =
-        traceroute::tcp_traceroute(task.ip, args.traceroute_max_hops, args.traceroute_retries);
+    let target_traceroute = async {
+        if traceroute_enabled {
+            traceroute::tcp_traceroute(task.ip, args.traceroute_max_hops, args.traceroute_retries)
+                .await
+        } else {
+            None
+        }
+    };
     let control_traceroute = async {
         join_all(control_targets.into_iter().map(|target| {
             traceroute::tcp_traceroute(target, args.traceroute_max_hops, args.traceroute_retries)

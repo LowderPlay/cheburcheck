@@ -15,6 +15,8 @@ pub struct ProbeConfig {
     pub published_at: String,
     pub hosts: Vec<Host>,
     #[serde(default)]
+    pub traceroute_enabled: bool,
+    #[serde(default)]
     pub control_hosts: Vec<String>,
 }
 

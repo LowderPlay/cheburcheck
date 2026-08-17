@@ -88,6 +88,7 @@ impl MqttPublisher {
                 task_timeout_ms,
                 published_at: Utc::now().to_rfc3339(),
                 hosts: Vec::new(),
+                traceroute_enabled: false,
                 control_hosts: Vec::new(),
             }
         }));
@@ -267,6 +268,9 @@ fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> 
         task_timeout_ms,
         published_at: Utc::now().to_rfc3339(),
         hosts: config.hosts,
+        traceroute_enabled: std::env::var("PROBE_TRACEROUTE_ENABLED")
+            .ok()
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
         control_hosts: config.control_hosts,
     })
 }

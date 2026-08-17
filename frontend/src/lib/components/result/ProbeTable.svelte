@@ -8,7 +8,6 @@ import {
 	CircleX,
 	LoaderCircle,
 	ShieldCheck,
-	TriangleAlert,
 } from "@lucide/svelte";
 import type { ProbeResult, ProbeStatus } from "$lib/api/probe";
 
@@ -59,7 +58,7 @@ const verdictStyles = {
 	},
 	whitelist: {
 		icon: ShieldCheck,
-		text: "Белый список",
+		text: "Исключение для CDN",
 		class: "text-amber-500",
 		bg: "bg-amber-500/10",
 		border: "border-amber-500/20",
@@ -149,12 +148,23 @@ const verdictStyles = {
 								<div class="text-xs text-neutral-500">{probe.asn || ""}</div>
 							</td>
 							<td class="p-3">
-								<div
-									class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
-								>
-									<style.icon size={14} />
-									{style.text}
-								</div>
+								{#if probe.verdict === "whitelist"}
+									<a
+										href="/kb/whitelist"
+										onclick={(event) => event.stopPropagation()}
+										class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-colors hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-400`}
+									>
+										<style.icon size={14} />
+										{style.text}
+									</a>
+								{:else}
+									<div
+										class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
+									>
+										<style.icon size={14} />
+										{style.text}
+									</div>
+								{/if}
 							</td>
 							<td class="p-3 text-right">
 								{#if isExpanded}
@@ -167,7 +177,7 @@ const verdictStyles = {
 						{#if isExpanded}
 							<tr class="bg-neutral-900/30">
 								<td colspan="4" class="p-4 border-b border-neutral-800/50">
-									{#if probe.verdict === "tspu_block"}
+									<!-- {#if probe.verdict === "tspu_block"}
 										<div
 											class="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/15 px-3 py-2 text-red-200"
 										>
@@ -184,7 +194,7 @@ const verdictStyles = {
 											{probe.target_hop}
 											прыжков
 										</div>
-									{/if}
+									{/if} -->
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 										{#each probe.host_results as host}
 											<div
