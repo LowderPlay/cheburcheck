@@ -9,7 +9,7 @@
 
 ## Сборка
 
-Готовые бинарные файлы и Debian-пакеты можно скачать на [странице релизов](https://github.com/LowderPlay/cheburcheck/releases).
+Готовые бинарные файлы, Debian-пакеты и OpenWrt пакеты для arm64 можно скачать на [странице релизов](https://github.com/LowderPlay/cheburcheck/releases).
 
 На Debian-based дистрибутивах можно собрать пакет через `cargo-deb`:
 
@@ -26,6 +26,50 @@ cargo run --package probe --bin cheburprobe -- \
 ```
 
 Также доступен Docker-образ, который собирается из `probe/Dockerfile`.
+
+Для OpenWrt на arm64 установите основной `.apk` и пакет LuCI. Пакеты из GitHub
+Actions не подписаны, поэтому для локальной установки нужен флаг `--allow-untrusted`:
+
+Узнать архитектуру на OpenWrt с `apk`:
+
+```shell
+apk --print-arch
+```
+
+Например, для результата `aarch64_cortex-a53` нужен файл с
+`_aarch64_cortex-a53.apk` в имени:
+
+```shell
+apk --allow-untrusted add \
+  ./cheburprobe-*_"$(apk --print-arch)".apk \
+  ./luci-app-cheburprobe-*.apk
+```
+
+После установки откройте **Службы → Cheburprobe** в LuCI, заполните ID и токен,
+включите сервис и нажмите **Сохранить и применить**. Те же настройки доступны
+через UCI в `/etc/config/cheburprobe`. Конфигурационный файл устанавливается с
+правами `0600`, поскольку токен хранится в нем в открытом виде.
+
+На OpenWrt с пакетным менеджером `opkg` установите совместимые `.ipk` пакеты:
+
+```shell
+opkg print-architecture
+```
+
+Команда может вывести несколько строк. Выберите специфичную для процессора
+архитектуру, например `aarch64_cortex-a53`, а не универсальную `all`.
+
+```shell
+opkg install \
+  ./cheburprobe_*_<АРХИТЕКТУРА_УСТРОЙСТВА>.ipk \
+  ./luci-app-cheburprobe_*_all.ipk
+```
+
+GitHub Actions выпускает пакеты для `aarch64_generic`, `aarch64_cortex-a53` и
+`aarch64_cortex-a72`. Для другого имени архитектуры OpenWrt пакет можно собрать
+с переменной `OPENWRT_ARCH`, например
+`OPENWRT_ARCH=aarch64_cortex-a53 probe/openwrt/build-apk.sh <binary> <output-dir>`.
+Та же переменная поддерживается скриптом `build-ipk.sh`.
 
 ## Получение доступа
 

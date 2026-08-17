@@ -1,0 +1,9 @@
+{
+	"admin/services/cheburprobe": {
+		"title": "Cheburprobe",
+		"order": 90,
+		"action": { "type": "view", "path": "cheburprobe/config" },
+		"depends": { "acl": [ "luci-app-cheburprobe" ] }
+	}
+}
+

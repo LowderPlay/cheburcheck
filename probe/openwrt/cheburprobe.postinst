@@ -1,0 +1,5 @@
+#!/bin/sh
+
+[ -n "${IPKG_INSTROOT:-}" ] || /etc/init.d/cheburprobe enable
+exit 0
+
