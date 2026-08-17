@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "probe"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4706,7 +4706,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.1.1"
+version = "1.2.0"
 dependencies = [
  "dotenvy",
  "env_logger",
