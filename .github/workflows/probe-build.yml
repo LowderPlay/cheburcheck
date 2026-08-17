@@ -11,6 +11,7 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-probe
+  OPENWRT_ARM64_ARCHES: aarch64_generic aarch64_cortex-a53 aarch64_cortex-a72
 
 jobs:
   linux-amd64:
@@ -51,7 +52,7 @@ jobs:
           compression-level: 0
 
   linux-arm64:
-    name: Linux arm64 binary and .deb
+    name: Linux arm64 binary, .deb, and OpenWrt packages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -73,6 +74,30 @@ jobs:
       - name: Build Debian package
         run: cargo deb --package probe --target aarch64-unknown-linux-musl --no-strip --no-build -- --bin cheburprobe
 
+      - name: Build legacy OpenWrt opkg packages
+        run: |
+          chmod +x probe/openwrt/build-ipk.sh
+          for arch in $OPENWRT_ARM64_ARCHES; do
+            OPENWRT_ARCH="$arch" probe/openwrt/build-ipk.sh \
+              target/aarch64-unknown-linux-musl/release/cheburprobe \
+              target/aarch64-unknown-linux-musl/openwrt
+          done
+
+      - name: Build current OpenWrt APK packages
+        run: |
+          chmod +x probe/openwrt/build-apk.sh
+          for arch in $OPENWRT_ARM64_ARCHES; do
+            docker run --rm \
+              --env OPENWRT_ARCH="$arch" \
+              --env PACKAGE_FILE_ARCH_SUFFIX=1 \
+              --volume "$PWD:/work" \
+              --workdir /work \
+              alpine:edge \
+              probe/openwrt/build-apk.sh \
+                target/aarch64-unknown-linux-musl/release/cheburprobe \
+                target/aarch64-unknown-linux-musl/openwrt
+          done
+
       - name: Upload Linux arm64 binary
         uses: actions/upload-artifact@v7
         with:
@@ -85,6 +110,15 @@ jobs:
         with:
           name: cheburprobe-linux-arm64-deb
           path: target/aarch64-unknown-linux-musl/debian/*.deb
+          compression-level: 0
+
+      - name: Upload OpenWrt arm64 and LuCI packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheburprobe-openwrt-arm64-packages
+          path: |
+            target/aarch64-unknown-linux-musl/openwrt/*.apk
+            target/aarch64-unknown-linux-musl/openwrt/*.ipk
           compression-level: 0
 
   windows-amd64:

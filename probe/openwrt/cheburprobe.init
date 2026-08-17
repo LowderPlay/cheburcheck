@@ -1,0 +1,49 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+start_service() {
+	config_load cheburprobe
+	config_get_bool enabled main enabled 0
+	[ "$enabled" -eq 1 ] || return 0
+
+	config_get probe_id main probe_id
+	config_get probe_token main probe_token
+	config_get mqtt_host main mqtt_host 'wss://cheburcheck.ru/mqtt'
+	config_get mqtt_port main mqtt_port '443'
+	config_get connection_timeout main connection_timeout '30'
+	config_get max_concurrent_tasks main max_concurrent_tasks '8'
+	config_get traceroute_max_hops main traceroute_max_hops '5'
+	config_get traceroute_retries main traceroute_retries '3'
+	config_get traceroute_control_hosts main traceroute_control_hosts '3'
+	config_get log_level main log_level 'info'
+
+	procd_open_instance
+	procd_set_param command /usr/bin/cheburprobe
+	procd_set_param respawn 3600 5 5
+	procd_set_param env \
+		PROBE_ID="$probe_id" \
+		PROBE_TOKEN="$probe_token" \
+		MQTT_HOST="$mqtt_host" \
+		MQTT_PORT="$mqtt_port" \
+		MQTT_CONNECTION_TIMEOUT_SECS="$connection_timeout" \
+		MAX_CONCURRENT_TASKS="$max_concurrent_tasks" \
+		TRACEROUTE_MAX_HOPS="$traceroute_max_hops" \
+		TRACEROUTE_RETRIES="$traceroute_retries" \
+		TRACEROUTE_CONTROL_HOSTS="$traceroute_control_hosts" \
+		RUST_LOG="$log_level"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger cheburprobe
+}
+
+reload_service() {
+	stop
+	start
+}
