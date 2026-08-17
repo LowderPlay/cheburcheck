@@ -110,6 +110,19 @@ const verdictStyles = {
 		border: "border-neutral-400/20",
 	},
 };
+
+type VerdictStyle = keyof typeof verdictStyles;
+
+function probeVerdicts(
+	probe: ProbeResult,
+	isStaticBlocked: boolean,
+): VerdictStyle[] {
+	return probe.verdicts.map((verdict) =>
+		isStaticBlocked && probe.host_results?.length !== 0 && verdict === "ok"
+			? "cdn_block"
+			: verdict,
+	);
+}
 </script>
 
 <div class="mt-8 space-y-4">
@@ -169,7 +182,7 @@ const verdictStyles = {
 				</thead>
 				<tbody>
 					{#each probes as probe (probe.probe_id)}
-						{@const style = verdictStyles[(isStaticBlocked && probe.host_results?.length !== 0 && probe.verdict === "ok") ? "cdn_block" : probe.verdict]}
+						{@const verdicts = probeVerdicts(probe, isStaticBlocked)}
 						{@const isExpanded = !!expandedRows[probe.probe_id]}
 						<tr
 							class="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors cursor-pointer select-none"
@@ -187,23 +200,28 @@ const verdictStyles = {
 								<div class="text-xs text-neutral-500">{probe.asn || ""}</div>
 							</td>
 							<td class="p-3">
-								{#if probe.verdict === "whitelist"}
-									<a
-										href="/kb/whitelist"
-										onclick={(event) => event.stopPropagation()}
-										class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-colors hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-400`}
-									>
-										<style.icon size={14} />
-										{style.text}
-									</a>
-								{:else}
-									<div
-										class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
-									>
-										<style.icon size={14} />
-										{style.text}
-									</div>
-								{/if}
+								<div class="flex flex-wrap gap-1.5">
+									{#each verdicts as verdict}
+										{@const style = verdictStyles[verdict]}
+										{#if verdict === "whitelist"}
+											<a
+												href="/kb/whitelist"
+												onclick={(event) => event.stopPropagation()}
+												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-colors hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-400`}
+											>
+												<style.icon size={14} />
+												{style.text}
+											</a>
+										{:else}
+											<div
+												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
+											>
+												<style.icon size={14} />
+												{style.text}
+											</div>
+										{/if}
+									{/each}
+								</div>
 							</td>
 							<td class="p-3 text-right">
 								{#if isExpanded}
@@ -216,7 +234,7 @@ const verdictStyles = {
 						{#if isExpanded}
 							<tr class="bg-neutral-900/30">
 								<td colspan="4" class="p-4 border-b border-neutral-800/50">
-									<!-- {#if probe.verdict === "tspu_block"}
+									<!-- {#if probe.verdicts.includes("tspu_block")}
 										<div
 											class="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/15 px-3 py-2 text-red-200"
 										>

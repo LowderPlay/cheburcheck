@@ -153,7 +153,7 @@ pub fn build_probe_response(
     reporter_info: Option<ProbeReporterInfo>,
 ) -> Value {
     let hosts: HashMap<&String, &Host> = config.hosts.iter().map(|h| (&h.id, h)).collect();
-    let verdict = build_probe_verdict(
+    let verdicts = build_probe_verdicts(
         &raw.host_results,
         config,
         raw.target_traceroute.as_ref(),
@@ -194,7 +194,7 @@ pub fn build_probe_response(
         "region": region,
         "provider": provider,
         "asn": asn,
-        "verdict": verdict,
+        "verdicts": verdicts,
         "host_results": host_results,
         "target_hop": target_hop,
         "dns": raw.dns,
@@ -212,10 +212,16 @@ async fn insert_probe_report(
         .get("probe_id")
         .and_then(Value::as_str)
         .and_then(|probe_id| probe_id.parse::<i32>().ok());
-    let verdict = response
-        .get("verdict")
-        .and_then(Value::as_str)
-        .unwrap_or("uncertain");
+    let verdicts = response
+        .get("verdicts")
+        .and_then(Value::as_array)
+        .map(|verdicts| {
+            verdicts
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["uncertain"]);
     let (target_hop_count, target_trace_result) = traceroute_columns(target_traceroute);
     let (control_hop_count, control_trace_result) = traceroute_columns(control_traceroute);
 
@@ -229,7 +235,7 @@ async fn insert_probe_report(
         INSERT INTO probe_reports (
             query_id,
             probe_id,
-            verdict,
+            verdicts,
             result,
             target_hop_count,
             target_trace_result,
@@ -240,7 +246,7 @@ async fn insert_probe_report(
         ON CONFLICT (query_id, probe_id)
         DO UPDATE SET
             date = NOW(),
-            verdict = EXCLUDED.verdict,
+            verdicts = EXCLUDED.verdicts,
             result = EXCLUDED.result,
             target_hop_count = EXCLUDED.target_hop_count,
             target_trace_result = EXCLUDED.target_trace_result,
@@ -250,7 +256,7 @@ async fn insert_probe_report(
     )
     .bind(query_id)
     .bind(probe_id)
-    .bind(verdict)
+    .bind(verdicts)
     .bind(response)
     .bind(target_hop_count)
     .bind(target_trace_result)
@@ -289,13 +295,14 @@ async fn fetch_probe_reporter_info(
     .await
 }
 
-fn build_probe_verdict(
+fn build_probe_verdicts(
     results: &[HostProbeResult],
     config: &ProbeConfig,
     target_traceroute: Option<&TcpTracerouteResult>,
     control_traceroute: Option<&TcpTracerouteResult>,
     dns: Option<&reports::probe::DnsProbeResult>,
-) -> &'static str {
+) -> Vec<&'static str> {
+    let mut verdicts = Vec::new();
     let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
     if let (
         Some(TcpTracerouteResult {
@@ -309,11 +316,7 @@ fn build_probe_verdict(
     ) = (target_traceroute, control_traceroute)
         && target_hop < control_hop
     {
-        return "tspu_block";
-    }
-
-    if results.is_empty() {
-        return if dns_spoofing { "dns_spoofing" } else { "ok" };
+        verdicts.push("tspu_block");
     }
 
     let matched = results
@@ -327,69 +330,71 @@ fn build_probe_verdict(
         })
         .collect::<Vec<_>>();
 
-    if matched.is_empty() {
-        return if dns_spoofing {
-            "dns_spoofing"
-        } else {
-            "uncertain"
-        };
-    }
-
-    if is_strict_majority(
+    let host_verdict = if results.is_empty() {
+        "ok"
+    } else if matched.is_empty() {
+        "uncertain"
+    } else if is_strict_majority(
         matched.len(),
         matched
             .iter()
             .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::ClientHello))
             .count(),
     ) {
-        return "sni_block";
-    }
-
-    if dns_spoofing {
-        return "dns_spoofing";
-    }
-
-    if is_strict_majority(
+        "sni_block"
+    } else if is_strict_majority(
         matched.len(),
         matched
             .iter()
             .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::Good))
             .count(),
     ) {
-        return "whitelist";
-    }
-
-    let blacklist = matched
-        .iter()
-        .filter(|(host, _)| matches!(host.host_type, HostType::Blacklist))
-        .collect::<Vec<_>>();
-    let whitelist = matched
-        .iter()
-        .filter(|(host, _)| matches!(host.host_type, HostType::Whitelist))
-        .collect::<Vec<_>>();
-
-    let most_blacklist_timed_out = !blacklist.is_empty()
-        && is_strict_majority(
-            blacklist.len(),
-            blacklist
-                .iter()
-                .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::DataTimeout { .. }))
-                .count(),
-        );
-    let most_whitelist_good = !whitelist.is_empty()
-        && is_strict_majority(
-            whitelist.len(),
-            whitelist
-                .iter()
-                .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::Good))
-                .count(),
-        );
-
-    if most_blacklist_timed_out && most_whitelist_good {
-        "ok"
+        "whitelist"
     } else {
-        "uncertain"
+        let blacklist = matched
+            .iter()
+            .filter(|(host, _)| matches!(host.host_type, HostType::Blacklist))
+            .collect::<Vec<_>>();
+        let whitelist = matched
+            .iter()
+            .filter(|(host, _)| matches!(host.host_type, HostType::Whitelist))
+            .collect::<Vec<_>>();
+
+        let most_blacklist_timed_out = !blacklist.is_empty()
+            && is_strict_majority(
+                blacklist.len(),
+                blacklist
+                    .iter()
+                    .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::DataTimeout { .. }))
+                    .count(),
+            );
+        let most_whitelist_good = !whitelist.is_empty()
+            && is_strict_majority(
+                whitelist.len(),
+                whitelist
+                    .iter()
+                    .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::Good))
+                    .count(),
+            );
+
+        if most_blacklist_timed_out && most_whitelist_good {
+            "ok"
+        } else {
+            "uncertain"
+        }
+    };
+
+    if !matches!(host_verdict, "ok" | "uncertain") {
+        verdicts.push(host_verdict);
     }
+    if dns_spoofing {
+        verdicts.push("dns_spoofing");
+    }
+    if verdicts.is_empty() {
+        verdicts.push(host_verdict);
+    }
+
+    verdicts
 }
 
 fn publish_error_status(error: PublishError) -> Status {
@@ -436,14 +441,14 @@ mod tests {
         let target = icmp_trace(3);
         let control = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
-            "tspu_block"
+            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
+            vec!["tspu_block"]
         );
 
         let target = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
-            "ok"
+            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
+            vec!["ok"]
         );
     }
 
@@ -455,13 +460,13 @@ mod tests {
         };
         let control = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
-            "ok"
+            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
+            vec!["ok"]
         );
     }
 
     #[test]
-    fn sni_block_takes_priority_over_dns_spoofing() {
+    fn reports_sni_block_and_dns_spoofing_together() {
         let mut config = empty_config();
         config.hosts.push(Host {
             id: "test".to_string(),
@@ -484,8 +489,8 @@ mod tests {
         };
 
         assert_eq!(
-            build_probe_verdict(&results, &config, None, None, Some(&dns)),
-            "sni_block"
+            build_probe_verdicts(&results, &config, None, None, Some(&dns)),
+            vec!["sni_block", "dns_spoofing"]
         );
     }
 

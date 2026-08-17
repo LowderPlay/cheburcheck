@@ -32,13 +32,14 @@ export type ProbeResult = {
 	region?: string | null;
 	provider?: string | null;
 	asn?: string | null;
-	verdict:
+	verdicts: (
 		| "uncertain"
 		| "dns_spoofing"
 		| "sni_block"
 		| "tspu_block"
 		| "whitelist"
-		| "ok";
+		| "ok"
+	)[];
 	host_results: ProbeHostResult[] | null;
 	target_hop: number | null;
 	dns: {
