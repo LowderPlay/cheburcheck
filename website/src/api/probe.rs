@@ -296,9 +296,7 @@ fn build_probe_verdict(
     control_traceroute: Option<&TcpTracerouteResult>,
     dns: Option<&reports::probe::DnsProbeResult>,
 ) -> &'static str {
-    if dns.is_some_and(|result| result.spoofing_detected) {
-        return "dns_spoofing";
-    }
+    let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
     if let (
         Some(TcpTracerouteResult {
             result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: target_hop },
@@ -315,7 +313,7 @@ fn build_probe_verdict(
     }
 
     if results.is_empty() {
-        return "ok";
+        return if dns_spoofing { "dns_spoofing" } else { "ok" };
     }
 
     let matched = results
@@ -330,7 +328,11 @@ fn build_probe_verdict(
         .collect::<Vec<_>>();
 
     if matched.is_empty() {
-        return "uncertain";
+        return if dns_spoofing {
+            "dns_spoofing"
+        } else {
+            "uncertain"
+        };
     }
 
     if is_strict_majority(
@@ -341,6 +343,10 @@ fn build_probe_verdict(
             .count(),
     ) {
         return "sni_block";
+    }
+
+    if dns_spoofing {
+        return "dns_spoofing";
     }
 
     if is_strict_majority(
@@ -451,6 +457,35 @@ mod tests {
         assert_eq!(
             build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
             "ok"
+        );
+    }
+
+    #[test]
+    fn sni_block_takes_priority_over_dns_spoofing() {
+        let mut config = empty_config();
+        config.hosts.push(Host {
+            id: "test".to_string(),
+            host: "192.0.2.1".to_string(),
+            host_type: HostType::Blacklist,
+            file_path: String::new(),
+            timeout_sec: 1,
+            min_data: 1,
+        });
+        let results = vec![HostProbeResult {
+            host_id: "test".to_string(),
+            probe_evidence: ProbeEvidence::ClientHello,
+        }];
+        let dns = reports::probe::DnsProbeResult {
+            spoofing_detected: true,
+            suspicious_provider_count: 2,
+            verdict_threshold: 2,
+            samples_per_protocol: 3,
+            observations: vec![],
+        };
+
+        assert_eq!(
+            build_probe_verdict(&results, &config, None, None, Some(&dns)),
+            "sni_block"
         );
     }
 
