@@ -35,7 +35,7 @@ services:
       MQTT_HOST: rmqtt
       MQTT_PORT: 11883
       PROBE_TRACEROUTE_ENABLED: "${PROBE_TRACEROUTE_ENABLED:-false}"
-      PROBE_RATE_LIMIT_RPM: "${PROBE_RATE_LIMIT_RPM:-30}"
+      PROBE_RATE_LIMIT_RPM: "${PROBE_RATE_LIMIT_RPM:-5}"
     volumes:
       - database-cache:/var/cache/cheburcheck/databases
     expose:
