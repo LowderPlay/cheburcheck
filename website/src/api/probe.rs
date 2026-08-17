@@ -1,9 +1,10 @@
-use super::rate_limit::ApiRateLimiter;
+use super::rate_limit::ProbeRateLimiter;
 use crate::mqtt::{MqttPublisher, PublishError};
 use log::warn;
 use querying::target::Target;
 use reports::probe::{
     Host, HostProbeResult, HostType, ProbeConfig, ProbeEvidence, ProbeResultEvent,
+    TcpTracerouteOutcome, TcpTracerouteResult,
 };
 use rocket::State;
 use rocket::http::Status;
@@ -15,6 +16,7 @@ use rocket_client_addr::ClientRealAddr;
 use sqlx::postgres::PgPool;
 use sqlx::types::Uuid;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 #[derive(sqlx::FromRow)]
@@ -30,30 +32,47 @@ pub async fn probe_query(
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
     mqtt: &State<MqttPublisher>,
-    limiter: &State<Arc<ApiRateLimiter>>,
+    limiter: &State<Arc<ProbeRateLimiter>>,
 ) -> Result<EventStream![Event], Status> {
-    if limiter.check_key(&addr.ip).is_err() {
+    if !limiter.check(&addr.ip) {
         return Err(Status::TooManyRequests);
     }
 
     let id = Uuid::try_parse(id).map_err(|_| Status::BadRequest)?;
-    let query: Option<String> = sqlx::query_scalar("SELECT query FROM queries WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&**pool)
-        .await
-        .map_err(|_| Status::InternalServerError)?;
+    let query: Option<(String, Vec<String>)> =
+        sqlx::query_as("SELECT query, resolved_ips FROM queries WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&**pool)
+            .await
+            .map_err(|_| Status::InternalServerError)?;
 
-    let query = query.ok_or(Status::NotFound)?;
-    let Target::Domain(domain) = Target::from(query.trim()) else {
-        return Err(Status::BadRequest);
+    let (query, resolved_ips) = query.ok_or(Status::NotFound)?;
+    let target = Target::from(query.trim());
+    let domain = match &target {
+        Target::Domain(domain) => Some(domain.as_str()),
+        Target::Ipv4(_) | Target::Ipv6(_) => None,
+        Target::Ipv4Subnet(_) | Target::Ipv6Subnet(_) | Target::Asn(_) => {
+            return Err(Status::BadRequest);
+        }
     };
+    let probe_config = mqtt.probe_config();
+    if domain.is_none() && !probe_config.traceroute_enabled {
+        return Err(Status::BadRequest);
+    }
+    let ip = resolved_ips
+        .first()
+        .and_then(|ip| ip.parse::<IpAddr>().ok())
+        .ok_or(Status::BadRequest)?;
+    if Target::is_bogon(ip) {
+        return Err(Status::Forbidden);
+    }
 
     let mut results = mqtt.subscribe_probe_results(id).await.map_err(|error| {
         warn!("api: failed to subscribe to probe results for {id}: {error}");
         publish_error_status(error)
     })?;
 
-    mqtt.publish_probe_task(id, &domain)
+    mqtt.publish_probe_task(id, domain, ip)
         .await
         .map_err(|error| {
             warn!("api: failed to publish probe task for {id}: {error}");
@@ -62,7 +81,6 @@ pub async fn probe_query(
 
     let timeout = mqtt.task_timeout();
     let online_probes = mqtt.online_probe_count().await;
-    let probe_config = mqtt.probe_config();
     let pool = pool.inner().clone();
     let query_id = id;
     let id = id.to_string();
@@ -73,7 +91,7 @@ pub async fn probe_query(
 
         yield Event::data(json!({
             "id": id,
-            "target": domain,
+            "target": query,
             "online_probes": online_probes,
         }).to_string()).event("started");
 
@@ -88,6 +106,8 @@ pub async fn probe_query(
                     match result {
                         Ok(result) => {
                             responded_probes.insert(result.probe_id.clone());
+                            let target_traceroute = result.target_traceroute.clone();
+                            let control_traceroute = result.control_traceroute.clone();
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
                                 Ok(info) => info,
                                 Err(error) => {
@@ -99,7 +119,13 @@ pub async fn probe_query(
                                 }
                             };
                             let response = build_probe_response(result, &probe_config, reporter_info);
-                            if let Err(error) = insert_probe_report(query_id, &response, &pool).await {
+                            if let Err(error) = insert_probe_report(
+                                query_id,
+                                &response,
+                                target_traceroute.as_ref(),
+                                control_traceroute.as_ref(),
+                                &pool,
+                            ).await {
                                 warn!("api: failed to save probe report for query {id}: {error}");
                             }
                             yield Event::data(response.to_string()).event("result");
@@ -127,7 +153,22 @@ pub fn build_probe_response(
     reporter_info: Option<ProbeReporterInfo>,
 ) -> Value {
     let hosts: HashMap<&String, &Host> = config.hosts.iter().map(|h| (&h.id, h)).collect();
-    let verdict = build_probe_verdict(&raw.host_results, config);
+    let verdict = build_probe_verdict(
+        &raw.host_results,
+        config,
+        raw.target_traceroute.as_ref(),
+        raw.control_traceroute.as_ref(),
+        raw.dns.as_ref(),
+    );
+    let target_hop =
+        raw.target_traceroute
+            .as_ref()
+            .and_then(|traceroute| match &traceroute.result {
+                TcpTracerouteOutcome::Rst { hop }
+                | TcpTracerouteOutcome::Connected { hop }
+                | TcpTracerouteOutcome::IcmpTimeExceeded { hop } => Some(*hop),
+                TcpTracerouteOutcome::Timeout => None,
+            });
     let region = reporter_info.as_ref().and_then(|info| info.region.as_ref());
     let provider = reporter_info
         .as_ref()
@@ -155,12 +196,16 @@ pub fn build_probe_response(
         "asn": asn,
         "verdict": verdict,
         "host_results": host_results,
+        "target_hop": target_hop,
+        "dns": raw.dns,
     })
 }
 
 async fn insert_probe_report(
     query_id: Uuid,
     response: &Value,
+    target_traceroute: Option<&TcpTracerouteResult>,
+    control_traceroute: Option<&TcpTracerouteResult>,
     pool: &PgPool,
 ) -> Result<(), sqlx::Error> {
     let probe_id = response
@@ -171,6 +216,8 @@ async fn insert_probe_report(
         .get("verdict")
         .and_then(Value::as_str)
         .unwrap_or("uncertain");
+    let (target_hop_count, target_trace_result) = traceroute_columns(target_traceroute);
+    let (control_hop_count, control_trace_result) = traceroute_columns(control_traceroute);
 
     let Some(probe_id) = probe_id else {
         warn!("api: ignoring probe report with non-numeric probe_id");
@@ -179,23 +226,55 @@ async fn insert_probe_report(
 
     sqlx::query(
         r#"
-        INSERT INTO probe_reports (query_id, probe_id, verdict, result)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO probe_reports (
+            query_id,
+            probe_id,
+            verdict,
+            result,
+            target_hop_count,
+            target_trace_result,
+            control_hop_count,
+            control_trace_result
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (query_id, probe_id)
         DO UPDATE SET
             date = NOW(),
             verdict = EXCLUDED.verdict,
-            result = EXCLUDED.result
+            result = EXCLUDED.result,
+            target_hop_count = EXCLUDED.target_hop_count,
+            target_trace_result = EXCLUDED.target_trace_result,
+            control_hop_count = EXCLUDED.control_hop_count,
+            control_trace_result = EXCLUDED.control_trace_result
         "#,
     )
     .bind(query_id)
     .bind(probe_id)
     .bind(verdict)
     .bind(response)
+    .bind(target_hop_count)
+    .bind(target_trace_result)
+    .bind(control_hop_count)
+    .bind(control_trace_result)
     .execute(pool)
     .await?;
 
     Ok(())
+}
+
+fn traceroute_columns(
+    traceroute: Option<&TcpTracerouteResult>,
+) -> (Option<i16>, Option<&'static str>) {
+    let Some(traceroute) = traceroute else {
+        return (None, None);
+    };
+    let (hop, result) = match &traceroute.result {
+        TcpTracerouteOutcome::Rst { hop } => (Some(*hop), "Rst"),
+        TcpTracerouteOutcome::Connected { hop } => (Some(*hop), "Connected"),
+        TcpTracerouteOutcome::IcmpTimeExceeded { hop } => (Some(*hop), "IcmpTimeExceeded"),
+        TcpTracerouteOutcome::Timeout => (None, "Timeout"),
+    };
+    (hop.map(i16::from), Some(result))
 }
 
 async fn fetch_probe_reporter_info(
@@ -210,7 +289,33 @@ async fn fetch_probe_reporter_info(
     .await
 }
 
-fn build_probe_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'static str {
+fn build_probe_verdict(
+    results: &[HostProbeResult],
+    config: &ProbeConfig,
+    target_traceroute: Option<&TcpTracerouteResult>,
+    control_traceroute: Option<&TcpTracerouteResult>,
+    dns: Option<&reports::probe::DnsProbeResult>,
+) -> &'static str {
+    let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
+    if let (
+        Some(TcpTracerouteResult {
+            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: target_hop },
+            ..
+        }),
+        Some(TcpTracerouteResult {
+            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: control_hop },
+            ..
+        }),
+    ) = (target_traceroute, control_traceroute)
+        && target_hop < control_hop
+    {
+        return "tspu_block";
+    }
+
+    if results.is_empty() {
+        return if dns_spoofing { "dns_spoofing" } else { "ok" };
+    }
+
     let matched = results
         .iter()
         .filter_map(|result| {
@@ -223,7 +328,11 @@ fn build_probe_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'s
         .collect::<Vec<_>>();
 
     if matched.is_empty() {
-        return "uncertain";
+        return if dns_spoofing {
+            "dns_spoofing"
+        } else {
+            "uncertain"
+        };
     }
 
     if is_strict_majority(
@@ -234,6 +343,10 @@ fn build_probe_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'s
             .count(),
     ) {
         return "sni_block";
+    }
+
+    if dns_spoofing {
+        return "dns_spoofing";
     }
 
     if is_strict_majority(
@@ -305,4 +418,88 @@ fn done_event(id: &str, response_count: usize, online_probes: usize) -> Event {
 
 fn is_strict_majority(total: usize, count: usize) -> bool {
     count > total / 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn icmp_trace(hop: u8) -> TcpTracerouteResult {
+        TcpTracerouteResult {
+            target: "192.0.2.1".parse().unwrap(),
+            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop },
+        }
+    }
+
+    #[test]
+    fn tspu_block_requires_an_earlier_target_icmp_hop() {
+        let target = icmp_trace(3);
+        let control = icmp_trace(5);
+        assert_eq!(
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
+            "tspu_block"
+        );
+
+        let target = icmp_trace(5);
+        assert_eq!(
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn tspu_block_requires_two_icmp_outcomes() {
+        let target = TcpTracerouteResult {
+            target: "192.0.2.1".parse().unwrap(),
+            result: TcpTracerouteOutcome::Connected { hop: 2 },
+        };
+        let control = icmp_trace(5);
+        assert_eq!(
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn sni_block_takes_priority_over_dns_spoofing() {
+        let mut config = empty_config();
+        config.hosts.push(Host {
+            id: "test".to_string(),
+            host: "192.0.2.1".to_string(),
+            host_type: HostType::Blacklist,
+            file_path: String::new(),
+            timeout_sec: 1,
+            min_data: 1,
+        });
+        let results = vec![HostProbeResult {
+            host_id: "test".to_string(),
+            probe_evidence: ProbeEvidence::ClientHello,
+        }];
+        let dns = reports::probe::DnsProbeResult {
+            spoofing_detected: true,
+            suspicious_provider_count: 2,
+            verdict_threshold: 2,
+            samples_per_protocol: 3,
+            observations: vec![],
+        };
+
+        assert_eq!(
+            build_probe_verdict(&results, &config, None, None, Some(&dns)),
+            "sni_block"
+        );
+    }
+
+    fn empty_config() -> ProbeConfig {
+        ProbeConfig {
+            version: String::new(),
+            task_timeout_ms: 0,
+            published_at: String::new(),
+            hosts: vec![],
+            traceroute_enabled: true,
+            control_hosts: vec![],
+            dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
+            dns_spoofing_provider_threshold:
+                reports::probe::default_dns_spoofing_provider_threshold(),
+        }
+    }
 }

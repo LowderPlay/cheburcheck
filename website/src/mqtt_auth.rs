@@ -56,7 +56,7 @@ pub async fn auth(
     pool: &rocket::State<PgPool>,
 ) -> Json<MqttAuthResponse> {
     let request = request.into_inner();
-    let _ = (request.clientid, request.protocol);
+    let _ = request.protocol;
 
     if request.username == "admin"
         && std::env::var("MQTT_ADMIN_TOKEN")
@@ -66,20 +66,19 @@ pub async fn auth(
         return Json(MqttAuthResponse::allow_superuser());
     }
 
-    if request.username != "probe" || request.password.is_empty() {
+    if request.username != "probe" || request.clientid.is_empty() || request.password.is_empty() {
         return Json(MqttAuthResponse::deny());
     }
 
-    let token_exists =
+    let reporter_id =
         sqlx::query_scalar::<_, i32>("SELECT id FROM reporters WHERE token = $1 LIMIT 1")
             .bind(request.password)
             .fetch_optional(&**pool)
             .await
             .ok()
-            .flatten()
-            .is_some();
+            .flatten();
 
-    if token_exists {
+    if reporter_id.is_some_and(|id| id.to_string() == request.clientid) {
         Json(MqttAuthResponse::allow())
     } else {
         Json(MqttAuthResponse::deny())

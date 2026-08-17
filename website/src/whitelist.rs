@@ -8,7 +8,7 @@ use rocket_cache_response::CacheResponse;
 use sqlx::postgres::PgPool;
 use std::io;
 
-enum ExportType {
+pub(crate) enum ExportType {
     Full,
     Domains,
 }

@@ -15,12 +15,17 @@ RUN --mount=type=cache,id=probe-target,target=/build/target \
 
 FROM docker.io/debian:bookworm-slim
 
-RUN groupadd --system app && \
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends libcap2-bin && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system app && \
     useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
 
 WORKDIR /app
 
 COPY --from=build /build/probe-bin ./probe
+
+RUN setcap cap_net_raw=ep ./probe
 
 USER app
 

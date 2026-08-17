@@ -10,6 +10,8 @@ ExecStart=/usr/bin/cheburprobe
 Restart=always
 RestartSec=5s
 DynamicUser=yes
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 LimitNOFILE=16384
 
 [Install]

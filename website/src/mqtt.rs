@@ -1,6 +1,6 @@
 use log::{info, warn};
 use reports::probe::HostType;
-use reports::probe::{Host, ProbeConfig, ProbeResultEvent, ProbeStatus, ProbeTask};
+use reports::probe::{Host, ProbeConfig, ProbeResult, ProbeResultEvent, ProbeStatus, ProbeTask};
 use rocket::serde::json::serde_json;
 use rumqttc::{AsyncClient, Event as MqttEvent, Incoming, MqttOptions, QoS};
 use serde::Deserialize;
@@ -8,6 +8,7 @@ use sqlx::types::Uuid;
 use sqlx::types::chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +61,12 @@ pub type ProbeResultReceiver = rocket::tokio::sync::broadcast::Receiver<ProbeRes
 struct ProbeHostsFile {
     timeout_sec: u32,
     min_data: u32,
+    #[serde(default = "reports::probe::default_dns_samples_per_protocol")]
+    dns_samples_per_protocol: u8,
+    #[serde(default = "reports::probe::default_dns_spoofing_provider_threshold")]
+    dns_spoofing_provider_threshold: u8,
+    #[serde(default)]
+    control_hosts: Vec<String>,
     hosts: Vec<ProbeHostEntry>,
 }
 
@@ -85,6 +92,11 @@ impl MqttPublisher {
                 task_timeout_ms,
                 published_at: Utc::now().to_rfc3339(),
                 hosts: Vec::new(),
+                traceroute_enabled: false,
+                control_hosts: Vec::new(),
+                dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
+                dns_spoofing_provider_threshold:
+                    reports::probe::default_dns_spoofing_provider_threshold(),
             }
         }));
         let admin_token = match std::env::var("MQTT_ADMIN_TOKEN") {
@@ -216,14 +228,16 @@ impl MqttPublisher {
     pub async fn publish_probe_task(
         &self,
         query_id: Uuid,
-        domain: &str,
+        domain: Option<&str>,
+        ip: IpAddr,
     ) -> Result<(), PublishError> {
         let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
         let query_id = query_id.to_string();
         let task = ProbeTask {
             id: query_id.clone(),
             query_id: query_id.clone(),
-            target: domain,
+            domain,
+            ip,
             created_at: Utc::now().to_rfc3339(),
             timeout_ms: self.task_timeout_ms,
         };
@@ -250,7 +264,7 @@ async fn publish_probe_config(
 }
 
 fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> {
-    let hosts = if let Some(path) = std::env::var_os("PROBE_CONFIG_PATH") {
+    let config = if let Some(path) = std::env::var_os("PROBE_CONFIG_PATH") {
         let contents = std::fs::read_to_string(path).map_err(PublishError::Config)?;
         parse_probe_hosts(&contents)?
     } else {
@@ -260,14 +274,27 @@ fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> 
         version: env!("CARGO_PKG_VERSION").to_string(),
         task_timeout_ms,
         published_at: Utc::now().to_rfc3339(),
-        hosts,
+        hosts: config.hosts,
+        traceroute_enabled: std::env::var("PROBE_TRACEROUTE_ENABLED")
+            .ok()
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
+        control_hosts: config.control_hosts,
+        dns_samples_per_protocol: config.dns_samples_per_protocol,
+        dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
     })
 }
 
-fn parse_probe_hosts(contents: &str) -> Result<Vec<Host>, PublishError> {
+struct ParsedProbeConfig {
+    hosts: Vec<Host>,
+    control_hosts: Vec<String>,
+    dns_samples_per_protocol: u8,
+    dns_spoofing_provider_threshold: u8,
+}
+
+fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> {
     let config: ProbeHostsFile = toml::from_str(&contents).map_err(PublishError::ConfigParse)?;
 
-    Ok(config
+    let hosts = config
         .hosts
         .into_iter()
         .map(|host| Host {
@@ -278,7 +305,14 @@ fn parse_probe_hosts(contents: &str) -> Result<Vec<Host>, PublishError> {
             timeout_sec: host.timeout_sec.unwrap_or(config.timeout_sec),
             min_data: host.min_data.unwrap_or(config.min_data),
         })
-        .collect())
+        .collect();
+
+    Ok(ParsedProbeConfig {
+        hosts,
+        control_hosts: config.control_hosts,
+        dns_samples_per_protocol: config.dns_samples_per_protocol,
+        dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
+    })
 }
 
 async fn dispatch_probe_status(
@@ -320,7 +354,7 @@ async fn dispatch_probe_result(
         return;
     };
 
-    let result = match serde_json::from_slice(payload) {
+    let result: ProbeResult = match serde_json::from_slice(payload) {
         Ok(result) => result,
         Err(error) => {
             warn!("ignoring invalid probe result JSON on {topic}: {error}");
@@ -333,7 +367,10 @@ async fn dispatch_probe_result(
         let _ = sender.send(ProbeResultEvent {
             job_id: job_id.to_string(),
             probe_id: probe_id.to_string(),
-            host_results: result,
+            host_results: result.responses.unwrap_or_default(),
+            target_traceroute: result.target_traceroute,
+            control_traceroute: result.control_traceroute,
+            dns: result.dns,
         });
     }
 }

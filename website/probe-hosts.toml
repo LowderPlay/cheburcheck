@@ -1,5 +1,8 @@
 timeout_sec = 3
 min_data = 65536
+dns_samples_per_protocol = 3
+dns_spoofing_provider_threshold = 2
+control_hosts = ["kinopoisk.ru", "wildberries.ru", "yandex.ru", "mail.ru"]
 
 [[hosts]]
 id = "hil-hetzner" # hil-speed.hetzner.com

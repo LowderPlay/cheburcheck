@@ -21,28 +21,33 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
       - name: Build release binary
-        run: cargo build --release --package probe --bin cheburprobe
+        run: cargo build --release --package probe --bin cheburprobe --target x86_64-unknown-linux-musl
 
       - name: Build Debian package
-        run: cargo deb --package probe --no-build -- --bin cheburprobe
+        run: cargo deb --package probe --target x86_64-unknown-linux-musl --no-strip --no-build -- --bin cheburprobe
 
       - name: Upload Linux amd64 binary
         uses: actions/upload-artifact@v7
         with:
           name: cheburprobe-linux-amd64
-          path: target/release/cheburprobe
+          path: target/x86_64-unknown-linux-musl/release/cheburprobe
           compression-level: 0
 
       - name: Upload Linux amd64 Debian package
         uses: actions/upload-artifact@v7
         with:
           name: cheburprobe-linux-amd64-deb
-          path: target/debian/*.deb
+          path: target/x86_64-unknown-linux-musl/debian/*.deb
           compression-level: 0
 
   linux-arm64:
@@ -61,25 +66,25 @@ jobs:
         uses: houseabsolute/actions-rust-cross@v1
         with:
           command: build
-          target: "aarch64-unknown-linux-gnu"
+          target: "aarch64-unknown-linux-musl"
           args: "--release --package probe --bin cheburprobe"
           strip: true
 
       - name: Build Debian package
-        run: cargo deb --package probe --target aarch64-unknown-linux-gnu --no-strip --no-build -- --bin cheburprobe
+        run: cargo deb --package probe --target aarch64-unknown-linux-musl --no-strip --no-build -- --bin cheburprobe
 
       - name: Upload Linux arm64 binary
         uses: actions/upload-artifact@v7
         with:
           name: cheburprobe-linux-arm64
-          path: target/aarch64-unknown-linux-gnu/release/cheburprobe
+          path: target/aarch64-unknown-linux-musl/release/cheburprobe
           compression-level: 0
 
       - name: Upload Linux arm64 Debian package
         uses: actions/upload-artifact@v7
         with:
           name: cheburprobe-linux-arm64-deb
-          path: target/aarch64-unknown-linux-gnu/debian/*.deb
+          path: target/aarch64-unknown-linux-musl/debian/*.deb
           compression-level: 0
 
   windows-amd64:

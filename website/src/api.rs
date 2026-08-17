@@ -9,5 +9,5 @@ mod status;
 pub use check_endpoint::check;
 pub use feedback_endpoint::feedback;
 pub use probe::probe_query;
-pub use rate_limit::build_rate_limiter;
+pub use rate_limit::{build_probe_rate_limiter, build_rate_limiter};
 pub use status::{get_system_status, healthcheck};
