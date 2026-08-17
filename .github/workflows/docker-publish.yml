@@ -80,4 +80,4 @@ jobs:
     steps:
       - name: Trigger Coolify deploy
         run: |
-          curl --fail --request GET '${{ secrets.COOLIFY_WEBHOOK }}' --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}'
+          curl --fail --request POST '${{ secrets.COOLIFY_WEBHOOK }}' --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}'
