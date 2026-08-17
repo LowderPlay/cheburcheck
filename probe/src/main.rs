@@ -1,3 +1,4 @@
+mod dns;
 mod sni;
 mod traceroute;
 
@@ -184,6 +185,12 @@ async fn update_config(
     payload: &[u8],
 ) -> Result<()> {
     let value: ProbeConfig = serde_json::from_slice(payload).context("decode probe config")?;
+    if value.dns_samples_per_protocol == 0 {
+        bail!("dns_samples_per_protocol must be greater than zero");
+    }
+    if !(1..=4).contains(&value.dns_spoofing_provider_threshold) {
+        bail!("dns_spoofing_provider_threshold must be between 1 and 4");
+    }
     let mut control_hosts_v4 = HashSet::new();
     let mut control_hosts_v6 = HashSet::new();
     if value.traceroute_enabled {
@@ -311,6 +318,21 @@ async fn handle_task(
             None
         }
     };
+    let dns_samples_per_protocol = config
+        .as_ref()
+        .map_or_else(reports::probe::default_dns_samples_per_protocol, |config| {
+            config.config.dns_samples_per_protocol
+        });
+    let dns_spoofing_provider_threshold = config.as_ref().map_or_else(
+        reports::probe::default_dns_spoofing_provider_threshold,
+        |config| config.config.dns_spoofing_provider_threshold,
+    );
+    let dns_check = dns::check_dns(
+        task.domain,
+        remaining,
+        dns_samples_per_protocol,
+        dns_spoofing_provider_threshold,
+    );
     let control_traceroute = async {
         join_all(control_targets.into_iter().map(|target| {
             traceroute::tcp_traceroute(target, args.traceroute_max_hops, args.traceroute_retries)
@@ -325,8 +347,8 @@ async fn handle_task(
             TcpTracerouteOutcome::Timeout => u8::MAX,
         })
     };
-    let (responses, target_traceroute, control_traceroute) =
-        tokio::join!(sni_check, target_traceroute, control_traceroute);
+    let (responses, target_traceroute, control_traceroute, dns) =
+        tokio::join!(sni_check, target_traceroute, control_traceroute, dns_check);
     let responses = responses?;
 
     client
@@ -338,6 +360,7 @@ async fn handle_task(
                 responses,
                 target_traceroute,
                 control_traceroute,
+                dns,
             })?,
         )
         .await

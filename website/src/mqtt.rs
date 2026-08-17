@@ -61,6 +61,10 @@ pub type ProbeResultReceiver = rocket::tokio::sync::broadcast::Receiver<ProbeRes
 struct ProbeHostsFile {
     timeout_sec: u32,
     min_data: u32,
+    #[serde(default = "reports::probe::default_dns_samples_per_protocol")]
+    dns_samples_per_protocol: u8,
+    #[serde(default = "reports::probe::default_dns_spoofing_provider_threshold")]
+    dns_spoofing_provider_threshold: u8,
     #[serde(default)]
     control_hosts: Vec<String>,
     hosts: Vec<ProbeHostEntry>,
@@ -90,6 +94,9 @@ impl MqttPublisher {
                 hosts: Vec::new(),
                 traceroute_enabled: false,
                 control_hosts: Vec::new(),
+                dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
+                dns_spoofing_provider_threshold:
+                    reports::probe::default_dns_spoofing_provider_threshold(),
             }
         }));
         let admin_token = match std::env::var("MQTT_ADMIN_TOKEN") {
@@ -272,12 +279,16 @@ fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> 
             .ok()
             .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
         control_hosts: config.control_hosts,
+        dns_samples_per_protocol: config.dns_samples_per_protocol,
+        dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
     })
 }
 
 struct ParsedProbeConfig {
     hosts: Vec<Host>,
     control_hosts: Vec<String>,
+    dns_samples_per_protocol: u8,
+    dns_spoofing_provider_threshold: u8,
 }
 
 fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> {
@@ -299,6 +310,8 @@ fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> 
     Ok(ParsedProbeConfig {
         hosts,
         control_hosts: config.control_hosts,
+        dns_samples_per_protocol: config.dns_samples_per_protocol,
+        dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
     })
 }
 
@@ -357,6 +370,7 @@ async fn dispatch_probe_result(
             host_results: result.responses.unwrap_or_default(),
             target_traceroute: result.target_traceroute,
             control_traceroute: result.control_traceroute,
+            dns: result.dns,
         });
     }
 }

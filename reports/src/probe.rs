@@ -18,6 +18,18 @@ pub struct ProbeConfig {
     pub traceroute_enabled: bool,
     #[serde(default)]
     pub control_hosts: Vec<String>,
+    #[serde(default = "default_dns_samples_per_protocol")]
+    pub dns_samples_per_protocol: u8,
+    #[serde(default = "default_dns_spoofing_provider_threshold")]
+    pub dns_spoofing_provider_threshold: u8,
+}
+
+pub const fn default_dns_samples_per_protocol() -> u8 {
+    3
+}
+
+pub const fn default_dns_spoofing_provider_threshold() -> u8 {
+    2
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,6 +65,7 @@ pub struct ProbeResultEvent {
     pub host_results: Vec<HostProbeResult>,
     pub target_traceroute: Option<TcpTracerouteResult>,
     pub control_traceroute: Option<TcpTracerouteResult>,
+    pub dns: Option<DnsProbeResult>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -60,6 +73,54 @@ pub struct ProbeResult {
     pub responses: Option<Vec<HostProbeResult>>,
     pub target_traceroute: Option<TcpTracerouteResult>,
     pub control_traceroute: Option<TcpTracerouteResult>,
+    #[serde(default)]
+    pub dns: Option<DnsProbeResult>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DnsProbeResult {
+    pub spoofing_detected: bool,
+    #[serde(default)]
+    pub suspicious_provider_count: u8,
+    #[serde(default)]
+    pub verdict_threshold: u8,
+    #[serde(default)]
+    pub samples_per_protocol: u8,
+    pub observations: Vec<DnsObservation>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DnsObservation {
+    pub provider: String,
+    pub protocol: DnsProtocol,
+    pub outcome: DnsOutcome,
+    #[serde(default)]
+    pub suspected_spoofing: bool,
+    #[serde(default)]
+    pub metadata: DnsResponseMetadata,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DnsResponseMetadata {
+    pub response_codes: Vec<String>,
+    pub ipv4_count: u16,
+    pub ipv6_count: u16,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum DnsProtocol {
+    Udp,
+    Tcp,
+    Doh,
+    Dot,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum DnsOutcome {
+    Answer { addresses: Vec<IpAddr> },
+    NoRecords,
+    Error { message: String },
 }
 
 #[derive(Clone, Serialize, Deserialize)]

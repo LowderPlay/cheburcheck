@@ -2639,6 +2639,7 @@ dependencies = [
  "env_logger",
  "etherparse",
  "futures",
+ "hickory-resolver",
  "log",
  "polling",
  "rand 0.8.5",

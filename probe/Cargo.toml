@@ -39,3 +39,4 @@ rustls = "0.23"
 tokio-rustls = "0.26"
 rand = "0.8"
 socket2 = { version = "0.6", features = ["all"] }
+hickory-resolver = { version = "0.26.0-beta.3", features = ["tokio", "webpki-roots", "https-aws-lc-rs"] }

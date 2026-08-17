@@ -9,7 +9,7 @@ import {
 	LoaderCircle,
 	ShieldCheck,
 } from "@lucide/svelte";
-import type { ProbeResult, ProbeStatus } from "$lib/api/probe";
+import type { DnsObservation, ProbeResult, ProbeStatus } from "$lib/api/probe";
 
 let {
 	probes,
@@ -25,6 +25,38 @@ let expandedRows = $state<Record<string, boolean>>({});
 
 function toggleRow(id: string) {
 	expandedRows[id] = !expandedRows[id];
+}
+
+function dnsObservationStatus(
+	observation: DnsObservation,
+): "ok" | "spoofed" | "error" {
+	if (observation.outcome.type === "Error") return "error";
+	return observation.suspected_spoofing ? "spoofed" : "ok";
+}
+
+const dnsProtocolLabels: Record<DnsObservation["protocol"], string> = {
+	Udp: "UDP",
+	Tcp: "TCP",
+	Doh: "DoH",
+	Dot: "DoT",
+};
+
+const dnsProtocols = ["Udp", "Tcp", "Doh", "Dot"] as const;
+
+function groupDnsObservations(observations: DnsObservation[]) {
+	const providers = new Map<
+		string,
+		Partial<Record<DnsObservation["protocol"], DnsObservation>>
+	>();
+	for (const observation of observations) {
+		const protocols = providers.get(observation.provider) ?? {};
+		protocols[observation.protocol] = observation;
+		providers.set(observation.provider, protocols);
+	}
+	return [...providers].map(([provider, protocols]) => ({
+		provider,
+		protocols,
+	}));
 }
 
 const verdictStyles = {
@@ -52,6 +84,13 @@ const verdictStyles = {
 	tspu_block: {
 		icon: CircleX,
 		text: "ТСПУ Блок",
+		class: "text-red-500",
+		bg: "bg-red-500/10",
+		border: "border-red-500/20",
+	},
+	dns_spoofing: {
+		icon: CircleX,
+		text: "Подмена DNS",
 		class: "text-red-500",
 		bg: "bg-red-500/10",
 		border: "border-red-500/20",
@@ -195,6 +234,92 @@ const verdictStyles = {
 											прыжков
 										</div>
 									{/if} -->
+									{#if probe.dns}
+										<div class="mb-4">
+											<div class="mb-2 flex items-center justify-between gap-3">
+												<h4
+													class="text-xs font-bold uppercase tracking-wide text-neutral-300"
+												>
+													DNS-проверка
+												</h4>
+												<span
+													class={`text-xs font-semibold ${probe.dns.spoofing_detected ? 'text-red-400' : probe.dns.suspicious_provider_count > 0 ? 'text-amber-400' : 'text-green-400'}`}
+												>
+													{probe.dns.spoofing_detected
+												? `Возможна подмена (${probe.dns.suspicious_provider_count}/${probe.dns.verdict_threshold})`
+												: probe.dns.suspicious_provider_count > 0
+													? `Недостаточно подтверждений (${probe.dns.suspicious_provider_count}/${probe.dns.verdict_threshold})`
+													: "Подмена не выявлена"}
+												</span>
+											</div>
+											<div
+												class="overflow-x-auto rounded border border-neutral-700/50"
+											>
+												<table class="w-full text-left text-xs">
+													<thead class="bg-neutral-800/60 text-neutral-400">
+														<tr>
+															<th class="px-3 py-2 font-semibold">Провайдер</th>
+															{#each dnsProtocols as protocol}
+																<th class="px-3 py-2 font-semibold">
+																	{dnsProtocolLabels[protocol]}
+																</th>
+															{/each}
+														</tr>
+													</thead>
+													<tbody>
+														{#each groupDnsObservations(probe.dns.observations) as provider}
+															<tr class="border-t border-neutral-800/80">
+																<td
+																	class="px-3 py-2 font-semibold capitalize text-neutral-200"
+																>
+																	{provider.provider}
+																</td>
+																{#each dnsProtocols as protocol}
+																	{@const observation = provider.protocols[protocol]}
+																	<td class="px-3 py-2">
+																		{#if observation}
+																			{@const dnsStatus = dnsObservationStatus(observation)}
+																			<div
+																				class={dnsStatus === "spoofed" ? "text-red-400" : dnsStatus === "error" ? "text-amber-400" : "text-green-400"}
+																			>
+																				<div class="font-semibold">
+																					{dnsStatus === "spoofed" ? "Подозрительно" : dnsStatus === "error" ? "Ошибка" : "Норма"}
+																				</div>
+																				<div
+																					class="mt-0.5 whitespace-nowrap font-mono text-[10px] text-neutral-500"
+																				>
+																					{observation.metadata.response_codes.join(", ") || "—"}
+																					·
+																					{observation.metadata.ipv4_count}/{observation.metadata.ipv6_count}
+																				</div>
+																			</div>
+																		{:else}
+																			<span class="text-neutral-600">—</span>
+																		{/if}
+																	</td>
+																{/each}
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+											</div>
+											<p class="mt-2 text-[11px] text-neutral-500">
+												Сравниваются код ответа и количество уникальных
+												IPv4/IPv6. Выполнено по
+												{probe.dns.samples_per_protocol || 1}
+												запроса на протокол. Вердикт требует подтверждения от
+												{probe.dns.verdict_threshold || 2}
+												DNS-провайдеров.
+											</p>
+										</div>
+									{/if}
+									<div class="mb-2 border-t border-neutral-800 pt-4">
+										<h4
+											class="text-xs font-bold uppercase tracking-wide text-neutral-300"
+										>
+											CDN-проверка
+										</h4>
+									</div>
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 										{#each probe.host_results as host}
 											<div

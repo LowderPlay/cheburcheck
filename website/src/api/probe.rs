@@ -158,6 +158,7 @@ pub fn build_probe_response(
         config,
         raw.target_traceroute.as_ref(),
         raw.control_traceroute.as_ref(),
+        raw.dns.as_ref(),
     );
     let target_hop =
         raw.target_traceroute
@@ -196,6 +197,7 @@ pub fn build_probe_response(
         "verdict": verdict,
         "host_results": host_results,
         "target_hop": target_hop,
+        "dns": raw.dns,
     })
 }
 
@@ -292,7 +294,11 @@ fn build_probe_verdict(
     config: &ProbeConfig,
     target_traceroute: Option<&TcpTracerouteResult>,
     control_traceroute: Option<&TcpTracerouteResult>,
+    dns: Option<&reports::probe::DnsProbeResult>,
 ) -> &'static str {
+    if dns.is_some_and(|result| result.spoofing_detected) {
+        return "dns_spoofing";
+    }
     if let (
         Some(TcpTracerouteResult {
             result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: target_hop },
@@ -424,13 +430,13 @@ mod tests {
         let target = icmp_trace(3);
         let control = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control)),
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
             "tspu_block"
         );
 
         let target = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control)),
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
             "ok"
         );
     }
@@ -443,7 +449,7 @@ mod tests {
         };
         let control = icmp_trace(5);
         assert_eq!(
-            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control)),
+            build_probe_verdict(&[], &empty_config(), Some(&target), Some(&control), None),
             "ok"
         );
     }
@@ -456,6 +462,9 @@ mod tests {
             hosts: vec![],
             traceroute_enabled: true,
             control_hosts: vec![],
+            dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
+            dns_spoofing_provider_threshold:
+                reports::probe::default_dns_spoofing_provider_threshold(),
         }
     }
 }

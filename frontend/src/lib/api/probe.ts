@@ -11,15 +11,43 @@ export type ProbeHostResult = {
 		  };
 };
 
+export type DnsObservation = {
+	provider: string;
+	protocol: "Udp" | "Tcp" | "Doh" | "Dot";
+	suspected_spoofing: boolean;
+	metadata: {
+		response_codes: string[];
+		ipv4_count: number;
+		ipv6_count: number;
+	};
+	outcome:
+		| { type: "Answer"; addresses: string[] }
+		| { type: "NoRecords" }
+		| { type: "Error"; message: string };
+};
+
 export type ProbeResult = {
 	job_id: string;
 	probe_id: string;
 	region?: string | null;
 	provider?: string | null;
 	asn?: string | null;
-	verdict: "uncertain" | "sni_block" | "tspu_block" | "whitelist" | "ok";
+	verdict:
+		| "uncertain"
+		| "dns_spoofing"
+		| "sni_block"
+		| "tspu_block"
+		| "whitelist"
+		| "ok";
 	host_results: ProbeHostResult[] | null;
 	target_hop: number | null;
+	dns: {
+		spoofing_detected: boolean;
+		suspicious_provider_count: number;
+		verdict_threshold: number;
+		samples_per_protocol: number;
+		observations: DnsObservation[];
+	} | null;
 };
 
 export type ProbeStatus = {
