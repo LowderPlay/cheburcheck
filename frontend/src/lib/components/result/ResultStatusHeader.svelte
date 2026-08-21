@@ -21,15 +21,15 @@ const labels: Record<ResultVerdict, { title: string; subtitle: string }> = {
 		subtitle: "Ресурс был найден в списках блокировок",
 	},
 	tspu_block: {
-		title: "Блокировка IP",
+		title: "Заблокирован",
 		subtitle: "Сканеры обнаружили блокировку TCP на уровне ТСПУ",
 	},
 	sni_block: {
-		title: "Блокировка SNI",
+		title: "Заблокирован",
 		subtitle: "Сканеры обнаружили блокировку по имени домена в SNI",
 	},
 	dns_spoofing: {
-		title: "Блокировка DNS",
+		title: "Заблокирован",
 		subtitle: "Сканеры обнаружили подмену ответов DNS для данного домена",
 	},
 	whitelist: {
@@ -38,11 +38,11 @@ const labels: Record<ResultVerdict, { title: string; subtitle: string }> = {
 			"Домен снимает ограничение 16-20 КБ при подключении к заблокированным CDN",
 	},
 	cdn_block: {
-		title: "Блокировка CDN",
+		title: "Заблокирован",
 		subtitle: "Сканеры обнаружили блокировку CDN (16-20 КБ)",
 	},
 	ok: {
-		title: "Доступен",
+		title: "Не ограничен",
 		subtitle: "Ограничений не обнаружено",
 	},
 	uncertain: {

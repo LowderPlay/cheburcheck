@@ -189,7 +189,7 @@ const providerCidrs = (provider: Provider) =>
 
 				{#if result.whitelist}
 					<DetailRow
-						label="Белый список (?)"
+						label="Исключение из CDN блокировки (?)"
 						href="/kb/whitelist"
 						icon={ShieldCheck}
 					>
