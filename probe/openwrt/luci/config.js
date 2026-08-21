@@ -44,15 +44,7 @@ return view.extend({
 		o.datatype = 'and(uinteger,min(1))';
 		o.default = '8';
 
-		o = s.option(form.Value, 'traceroute_max_hops', _('Traceroute maximum hops'));
-		o.datatype = 'and(uinteger,min(1))';
-		o.default = '5';
-
 		o = s.option(form.Value, 'traceroute_retries', _('Traceroute retries'));
-		o.datatype = 'and(uinteger,min(1))';
-		o.default = '3';
-
-		o = s.option(form.Value, 'traceroute_control_hosts', _('Traceroute control hosts'));
 		o.datatype = 'and(uinteger,min(1))';
 		o.default = '3';
 

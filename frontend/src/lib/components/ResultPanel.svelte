@@ -13,6 +13,7 @@ import {
 	ShieldCheck,
 } from "@lucide/svelte";
 import type { CheckResult } from "$lib/api/check";
+import type { ResolvedProbeVerdict } from "$lib/api/probe";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
@@ -21,23 +22,34 @@ import ResultTargetCard from "./result/ResultTargetCard.svelte";
 
 type Provider = { name: string; networks: { cidr: string }[] };
 type ResultTheme = "blocked" | "clean" | "whitelist";
+type ResultVerdict = ResolvedProbeVerdict | "blocked";
 
 let {
 	result,
+	probeVerdict = null,
 }: {
 	result: CheckResult;
+	probeVerdict?: ResolvedProbeVerdict | null;
 } = $props();
 
 const valueClass = "text-right text-sm font-medium text-neutral-200";
 const alertValueClass = `${valueClass} text-red-500`;
 const successValueClass = `${valueClass} text-green-500`;
 
-const theme = $derived<ResultTheme>(
+const staticVerdict = $derived<ResultVerdict>(
 	result.whitelist && !result.domain
 		? "whitelist"
 		: result.found
 			? "blocked"
-			: "clean",
+			: "ok",
+);
+const verdict = $derived<ResultVerdict>(probeVerdict ?? staticVerdict);
+const theme = $derived<ResultTheme>(
+	verdict === "whitelist"
+		? "whitelist"
+		: verdict === "ok"
+			? "clean"
+			: "blocked",
 );
 const panelClass = $derived(
 	theme === "whitelist"
@@ -67,7 +79,7 @@ const providerCidrs = (provider: Provider) =>
 <div class="mt-8 space-y-6">
 	<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 		<div class={`border p-4 rounded-lg flex items-center ${panelClass}`}>
-			<ResultStatusHeader {theme} blocked={result.blocked} />
+			<ResultStatusHeader {verdict} />
 		</div>
 		<ResultTargetCard
 			targetType={result.targetType}
@@ -171,7 +183,7 @@ const providerCidrs = (provider: Provider) =>
 
 				{#if result.whitelist}
 					<DetailRow
-						label="Белый список (?)"
+						label="Исключение для CDN блокировки (?)"
 						href="/kb/whitelist"
 						icon={ShieldCheck}
 					>

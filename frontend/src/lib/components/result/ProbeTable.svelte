@@ -8,17 +8,23 @@ import {
 	CircleX,
 	LoaderCircle,
 	ShieldCheck,
+	TriangleAlert,
 } from "@lucide/svelte";
-import type { DnsObservation, ProbeResult, ProbeStatus } from "$lib/api/probe";
+import {
+	type DnsObservation,
+	displayProbeVerdicts,
+	type ProbeResult,
+	type ProbeStatus,
+} from "$lib/api/probe";
 
 let {
 	probes,
 	status,
-	isStaticBlocked,
+	isStaticCdn,
 }: {
 	probes: ProbeResult[];
 	status: ProbeStatus;
-	isStaticBlocked: boolean;
+	isStaticCdn: boolean;
 } = $props();
 
 let expandedRows = $state<Record<string, boolean>>({});
@@ -110,19 +116,6 @@ const verdictStyles = {
 		border: "border-neutral-400/20",
 	},
 };
-
-type VerdictStyle = keyof typeof verdictStyles;
-
-function probeVerdicts(
-	probe: ProbeResult,
-	isStaticBlocked: boolean,
-): VerdictStyle[] {
-	return probe.verdicts.map((verdict) =>
-		isStaticBlocked && probe.host_results?.length !== 0 && verdict === "ok"
-			? "cdn_block"
-			: verdict,
-	);
-}
 </script>
 
 <div class="mt-8 space-y-4">
@@ -182,7 +175,7 @@ function probeVerdicts(
 				</thead>
 				<tbody>
 					{#each probes as probe (probe.probe_id)}
-						{@const verdicts = probeVerdicts(probe, isStaticBlocked)}
+						{@const verdicts = displayProbeVerdicts(probe, isStaticCdn)}
 						{@const isExpanded = !!expandedRows[probe.probe_id]}
 						<tr
 							class="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors cursor-pointer select-none"
@@ -203,23 +196,14 @@ function probeVerdicts(
 								<div class="flex flex-wrap gap-1.5">
 									{#each verdicts as verdict}
 										{@const style = verdictStyles[verdict]}
-										{#if verdict === "whitelist"}
-											<a
-												href="/kb/whitelist"
-												onclick={(event) => event.stopPropagation()}
-												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-colors hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-400`}
-											>
-												<style.icon size={14} />
-												{style.text}
-											</a>
-										{:else}
-											<div
-												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
-											>
-												<style.icon size={14} />
-												{style.text}
-											</div>
-										{/if}
+										<a
+											href={verdict === "whitelist" ? "/kb/whitelist" : "/kb/probing"}
+											onclick={(event) => event.stopPropagation()}
+											class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-opacity hover:opacity-80`}
+										>
+											<style.icon size={14} />
+											{style.text}
+										</a>
 									{/each}
 								</div>
 							</td>
@@ -234,27 +218,27 @@ function probeVerdicts(
 						{#if isExpanded}
 							<tr class="bg-neutral-900/30">
 								<td colspan="4" class="p-4 border-b border-neutral-800/50">
-									<!-- {#if probe.verdicts.includes("tspu_block")}
+									{#if probe.verdicts.includes("tspu_block") && probe.dpi_hop !== null}
 										<div
 											class="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/15 px-3 py-2 text-red-200"
 										>
 											<TriangleAlert size={18} class="shrink-0 text-red-400" />
 											<span class="font-bold">
-												Блокировка ТСПУ обнаружена после
-												{probe.target_hop}
+												Блокировка на ТСПУ обнаружена после
+												{probe.dpi_hop}
 												прыжка
 											</span>
 										</div>
-									{:else}
-										<div class="text-md text-neutral-200 mb-2">
-											Блокировка на ТСПУ <b>не обнаружена</b> после
-											{probe.target_hop}
-											прыжков
+									{:else if probe.target_hop !== null}
+										<div class="text-md text-neutral-200 mb-3">
+											Блокировка IP на ТСПУ <b>не обнаружена</b>
 										</div>
-									{/if} -->
+									{/if}
 									{#if probe.dns}
 										<div class="mb-4">
-											<div class="mb-2 flex items-center justify-between gap-3">
+											<div
+												class="border-t border-neutral-800 py-2 flex items-center justify-between gap-3"
+											>
 												<h4
 													class="text-xs font-bold uppercase tracking-wide text-neutral-300"
 												>
@@ -331,53 +315,57 @@ function probeVerdicts(
 											</p>
 										</div>
 									{/if}
-									<div class="mb-2 border-t border-neutral-800 pt-4">
-										<h4
-											class="text-xs font-bold uppercase tracking-wide text-neutral-300"
+									{#if probe.host_results?.length}
+										<div
+											class="border-t border-neutral-800 py-2 flex items-center justify-between gap-3"
 										>
-											CDN-проверка
-										</h4>
-									</div>
-									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-										{#each probe.host_results as host}
-											<div
-												class="flex items-center justify-between p-2 rounded bg-neutral-800/30 border border-neutral-700/30"
+											<h4
+												class="text-xs font-bold uppercase tracking-wide text-neutral-300"
 											>
-												<div class="flex flex-col">
-													<span class="text-xs font-bold text-neutral-400">
-														Сервер {host.host_id}
-														({host.host === "Blacklist" ? "в заблокированных" : "в доступных"}
-														диапазонах)
-													</span>
-													<span class="text-xs text-neutral-200">
-														{#if host.probe_evidence.type === 'Good'}
-															Успешно
-														{:else if host.probe_evidence.type === 'ClientHello'}
-															Блокировка после ClientHello
-														{:else if host.probe_evidence.type === 'DataTimeout'}
-															Таймаут получения данных, получено
-															{host.probe_evidence.bytes}
-															байт
-														{:else if host.probe_evidence.type === 'ConnectionError'}
-															Ошибка подключения
-														{/if}
-													</span>
+												CDN-проверка
+											</h4>
+										</div>
+										<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+											{#each probe.host_results as host}
+												<div
+													class="flex items-center justify-between p-2 rounded bg-neutral-800/30 border border-neutral-700/30"
+												>
+													<div class="flex flex-col">
+														<span class="text-xs font-bold text-neutral-400">
+															Сервер {host.host_id}
+															({host.host === "Blacklist" ? "в заблокированных" : "в доступных"}
+															диапазонах)
+														</span>
+														<span class="text-xs text-neutral-200">
+															{#if host.probe_evidence.type === 'Good'}
+																Успешно
+															{:else if host.probe_evidence.type === 'ClientHello'}
+																Блокировка после ClientHello
+															{:else if host.probe_evidence.type === 'DataTimeout'}
+																Таймаут получения данных, получено
+																{host.probe_evidence.bytes}
+																байт
+															{:else if host.probe_evidence.type === 'ConnectionError'}
+																Ошибка подключения
+															{/if}
+														</span>
+													</div>
+													{#if host.probe_evidence.type === 'Good'}
+														<CircleCheck size={14} class="text-green-500" />
+													{:else if host.probe_evidence.type === 'ClientHello'}
+														<CircleX size={14} class="text-red-500" />
+													{:else if host.probe_evidence.type === 'DataTimeout'}
+														<CircleX size={14} class="text-orange-500" />
+													{:else}
+														<CircleQuestionMark
+															size={14}
+															class="text-neutral-500"
+														/>
+													{/if}
 												</div>
-												{#if host.probe_evidence.type === 'Good'}
-													<CircleCheck size={14} class="text-green-500" />
-												{:else if host.probe_evidence.type === 'ClientHello'}
-													<CircleX size={14} class="text-red-500" />
-												{:else if host.probe_evidence.type === 'DataTimeout'}
-													<CircleX size={14} class="text-orange-500" />
-												{:else}
-													<CircleQuestionMark
-														size={14}
-														class="text-neutral-500"
-													/>
-												{/if}
-											</div>
-										{/each}
-									</div>
+											{/each}
+										</div>
+									{/if}
 								</td>
 							</tr>
 						{/if}

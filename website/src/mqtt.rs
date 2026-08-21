@@ -1,6 +1,8 @@
 use log::{info, warn};
 use reports::probe::HostType;
-use reports::probe::{Host, ProbeConfig, ProbeResult, ProbeResultEvent, ProbeStatus, ProbeTask};
+use reports::probe::{
+    DpiProbeConfig, Host, ProbeConfig, ProbeResult, ProbeResultEvent, ProbeStatus, ProbeTask,
+};
 use rocket::serde::json::serde_json;
 use rumqttc::{AsyncClient, Event as MqttEvent, Incoming, MqttOptions, QoS};
 use serde::Deserialize;
@@ -11,6 +13,8 @@ use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+const MQTT_MAX_PACKET_SIZE: usize = 1024 * 1024;
 
 const DEFAULT_PROBE_HOSTS: &str = include_str!("../probe-hosts.toml");
 
@@ -66,7 +70,7 @@ struct ProbeHostsFile {
     #[serde(default = "reports::probe::default_dns_spoofing_provider_threshold")]
     dns_spoofing_provider_threshold: u8,
     #[serde(default)]
-    control_hosts: Vec<String>,
+    dpi_probe: Option<DpiProbeConfig>,
     hosts: Vec<ProbeHostEntry>,
 }
 
@@ -93,10 +97,10 @@ impl MqttPublisher {
                 published_at: Utc::now().to_rfc3339(),
                 hosts: Vec::new(),
                 traceroute_enabled: false,
-                control_hosts: Vec::new(),
                 dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
                 dns_spoofing_provider_threshold:
                     reports::probe::default_dns_spoofing_provider_threshold(),
+                dpi_probe: None,
             }
         }));
         let admin_token = match std::env::var("MQTT_ADMIN_TOKEN") {
@@ -124,6 +128,7 @@ impl MqttPublisher {
         let mut options = MqttOptions::new(client_id, host.clone(), port);
         options.set_credentials("admin", admin_token);
         options.set_keep_alive(Duration::from_secs(10));
+        options.set_max_packet_size(MQTT_MAX_PACKET_SIZE, MQTT_MAX_PACKET_SIZE);
 
         let (client, mut eventloop) = AsyncClient::new(options, 100);
         let event_sessions = sessions.clone();
@@ -278,17 +283,17 @@ fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> 
         traceroute_enabled: std::env::var("PROBE_TRACEROUTE_ENABLED")
             .ok()
             .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
-        control_hosts: config.control_hosts,
         dns_samples_per_protocol: config.dns_samples_per_protocol,
         dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
+        dpi_probe: config.dpi_probe,
     })
 }
 
 struct ParsedProbeConfig {
     hosts: Vec<Host>,
-    control_hosts: Vec<String>,
     dns_samples_per_protocol: u8,
     dns_spoofing_provider_threshold: u8,
+    dpi_probe: Option<DpiProbeConfig>,
 }
 
 fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> {
@@ -309,9 +314,9 @@ fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> 
 
     Ok(ParsedProbeConfig {
         hosts,
-        control_hosts: config.control_hosts,
         dns_samples_per_protocol: config.dns_samples_per_protocol,
         dns_spoofing_provider_threshold: config.dns_spoofing_provider_threshold,
+        dpi_probe: config.dpi_probe,
     })
 }
 
@@ -369,7 +374,7 @@ async fn dispatch_probe_result(
             probe_id: probe_id.to_string(),
             host_results: result.responses.unwrap_or_default(),
             target_traceroute: result.target_traceroute,
-            control_traceroute: result.control_traceroute,
+            dpi_hop: result.dpi_hop,
             dns: result.dns,
         });
     }

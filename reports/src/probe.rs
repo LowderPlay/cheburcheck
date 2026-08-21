@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddrV4, SocketAddrV6};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProbeStatus<'a> {
     pub online: bool,
     pub probe_id: &'a str,
     pub version: &'a str,
+    #[serde(default)]
+    pub dpi_hop_v4: Option<u8>,
+    #[serde(default)]
+    pub dpi_hop_v6: Option<u8>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -16,12 +20,28 @@ pub struct ProbeConfig {
     pub hosts: Vec<Host>,
     #[serde(default)]
     pub traceroute_enabled: bool,
-    #[serde(default)]
-    pub control_hosts: Vec<String>,
     #[serde(default = "default_dns_samples_per_protocol")]
     pub dns_samples_per_protocol: u8,
     #[serde(default = "default_dns_spoofing_provider_threshold")]
     pub dns_spoofing_provider_threshold: u8,
+    #[serde(default)]
+    pub dpi_probe: Option<DpiProbeConfig>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DpiProbeConfig {
+    pub sni: String,
+    pub target_v4: SocketAddrV4,
+    pub target_v6: SocketAddrV6,
+    pub connect_timeout_ms: u64,
+    pub hop_timeout_ms: u64,
+    pub max_ttl: u8,
+    #[serde(default = "default_post_dpi_hop_limit")]
+    pub post_dpi_hop_limit: u8,
+}
+
+pub const fn default_post_dpi_hop_limit() -> u8 {
+    3
 }
 
 pub const fn default_dns_samples_per_protocol() -> u8 {
@@ -64,7 +84,7 @@ pub struct ProbeResultEvent {
     pub probe_id: String,
     pub host_results: Vec<HostProbeResult>,
     pub target_traceroute: Option<TcpTracerouteResult>,
-    pub control_traceroute: Option<TcpTracerouteResult>,
+    pub dpi_hop: Option<u8>,
     pub dns: Option<DnsProbeResult>,
 }
 
@@ -72,7 +92,8 @@ pub struct ProbeResultEvent {
 pub struct ProbeResult {
     pub responses: Option<Vec<HostProbeResult>>,
     pub target_traceroute: Option<TcpTracerouteResult>,
-    pub control_traceroute: Option<TcpTracerouteResult>,
+    #[serde(default)]
+    pub dpi_hop: Option<u8>,
     #[serde(default)]
     pub dns: Option<DnsProbeResult>,
 }

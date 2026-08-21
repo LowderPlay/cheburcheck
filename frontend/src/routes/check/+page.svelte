@@ -6,6 +6,7 @@ import { CheckRequestError, fetchCheck } from "$lib/api/check";
 import {
 	type ProbeResult,
 	type ProbeStatus,
+	selectProbeVerdict,
 	startProbeSSE,
 } from "$lib/api/probe";
 import EmptyResult from "$lib/components/EmptyResult.svelte";
@@ -104,6 +105,14 @@ $effect(() => {
 const error = $derived(
 	(checkQuery.error instanceof CheckRequestError && checkQuery.error) || null,
 );
+const liveVerdict = $derived(
+	checkQuery.data && probeQuery.data
+		? selectProbeVerdict(
+				probeQuery.data.probes,
+				checkQuery.data.providers.length > 0,
+			)
+		: null,
+);
 </script>
 
 <SearchForm />
@@ -121,13 +130,13 @@ const error = $derived(
 		<ErrorMessage status={error.status} reason={error.message} />
 	</div>
 {:else if checkQuery.data}
-	<ResultPanel result={checkQuery.data} />
+	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} />
 
 	{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
 		<ProbeTable
 			probes={probeQuery.data.probes}
 			status={probeQuery.data.status}
-			isStaticBlocked={checkQuery.data.blocked}
+			isStaticCdn={checkQuery.data.providers.length > 0}
 		/>
 	{/if}
 

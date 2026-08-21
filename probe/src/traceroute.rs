@@ -14,10 +14,11 @@ const HOP_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub async fn tcp_traceroute(
     target: IpAddr,
-    max_hops: u8,
+    start_hop: u8,
+    hop_limit: u8,
     retries: u8,
 ) -> Option<TcpTracerouteResult> {
-    tokio::task::spawn_blocking(move || trace_blocking(target, max_hops, retries))
+    tokio::task::spawn_blocking(move || trace_blocking(target, start_hop, hop_limit, retries))
         .await
         .map_err(|error| log::warn!("TCP traceroute task failed for {target}: {error}"))
         .ok()?
@@ -25,15 +26,24 @@ pub async fn tcp_traceroute(
         .ok()
 }
 
-fn trace_blocking(target: IpAddr, max_hops: u8, retries: u8) -> io::Result<TcpTracerouteResult> {
+fn trace_blocking(
+    target: IpAddr,
+    start_hop: u8,
+    hop_limit: u8,
+    retries: u8,
+) -> io::Result<TcpTracerouteResult> {
+    if start_hop == 0 || hop_limit == 0 || retries == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "start_hop, hop_limit, and retries must be greater than zero",
+        ));
+    }
     let (domain, icmp_protocol) = match target {
         IpAddr::V4(_) => (Domain::IPV4, Protocol::ICMPV4),
         IpAddr::V6(_) => (Domain::IPV6, Protocol::ICMPV6),
     };
     let receiver = Socket::new(domain, Type::RAW, Some(icmp_protocol))?;
-    let mut last_icmp_hop = None;
-
-    for ttl in 1..=max_hops {
+    for ttl in post_dpi_hops(start_hop, hop_limit) {
         let destination = SockAddr::from(SocketAddr::new(target, HTTPS_PORT));
         let mut tcp_attempts = Vec::with_capacity(retries as usize);
         let mut last_error = None;
@@ -72,7 +82,12 @@ fn trace_blocking(target: IpAddr, max_hops: u8, retries: u8) -> io::Result<TcpTr
             return Err(last_error.unwrap_or_else(|| io::Error::other("no traceroute attempts")));
         }
         match wait_for_hop_response(&receiver, &tcp_attempts, target)? {
-            HopResponse::IcmpTimeExceeded => last_icmp_hop = Some(ttl),
+            HopResponse::IcmpTimeExceeded => {
+                return Ok(TcpTracerouteResult {
+                    target,
+                    result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: ttl },
+                });
+            }
             HopResponse::Rst => {
                 return Ok(TcpTracerouteResult {
                     target,
@@ -91,10 +106,12 @@ fn trace_blocking(target: IpAddr, max_hops: u8, retries: u8) -> io::Result<TcpTr
 
     Ok(TcpTracerouteResult {
         target,
-        result: last_icmp_hop
-            .map(|hop| TcpTracerouteOutcome::IcmpTimeExceeded { hop })
-            .unwrap_or(TcpTracerouteOutcome::Timeout),
+        result: TcpTracerouteOutcome::Timeout,
     })
+}
+
+fn post_dpi_hops(start_hop: u8, hop_limit: u8) -> impl Iterator<Item = u8> {
+    (0..hop_limit).map_while(move |offset| start_hop.checked_add(offset))
 }
 
 fn is_connect_in_progress(error: &io::Error) -> bool {
@@ -302,5 +319,11 @@ mod tests {
 
         assert!(matching_ipv6_time_exceeded(&packet, target, 42_000));
         assert!(!matching_ipv6_time_exceeded(&packet, target, 42_001));
+    }
+
+    #[test]
+    fn post_dpi_hop_range_starts_at_requested_hop_and_is_bounded() {
+        assert_eq!(post_dpi_hops(6, 3).collect::<Vec<_>>(), vec![6, 7, 8]);
+        assert_eq!(post_dpi_hops(254, 3).collect::<Vec<_>>(), vec![254, 255]);
     }
 }

@@ -2,7 +2,15 @@ timeout_sec = 3
 min_data = 65536
 dns_samples_per_protocol = 3
 dns_spoofing_provider_threshold = 2
-control_hosts = ["kinopoisk.ru", "wildberries.ru", "yandex.ru", "mail.ru"]
+
+[dpi_probe]
+sni = "rutracker.org"
+target_v4 = "188.120.251.237:443"
+target_v6 = "[2a01:230:4:ca4::2]:443"
+connect_timeout_ms = 5000
+hop_timeout_ms = 1000
+max_ttl = 15
+post_dpi_hop_limit = 3
 
 [[hosts]]
 id = "hil-hetzner" # hil-speed.hetzner.com
