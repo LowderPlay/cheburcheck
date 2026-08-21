@@ -28,7 +28,7 @@ const labels: Record<ResultVerdict, { title: string; subtitle: string }> = {
 		subtitle: "Сканеры обнаружили подмену ответов DNS для данного домена",
 	},
 	whitelist: {
-		title: "Исключение из CDN",
+		title: "Исключение для CDN",
 		subtitle:
 			"Домен снимает ограничение 16-20 КБ при подключении к заблокированным CDN",
 	},
