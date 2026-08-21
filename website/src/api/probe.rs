@@ -107,7 +107,6 @@ pub async fn probe_query(
                         Ok(result) => {
                             responded_probes.insert(result.probe_id.clone());
                             let target_traceroute = result.target_traceroute.clone();
-                            let control_traceroute = result.control_traceroute.clone();
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
                                 Ok(info) => info,
                                 Err(error) => {
@@ -123,7 +122,6 @@ pub async fn probe_query(
                                 query_id,
                                 &response,
                                 target_traceroute.as_ref(),
-                                control_traceroute.as_ref(),
                                 &pool,
                             ).await {
                                 warn!("api: failed to save probe report for query {id}: {error}");
@@ -157,7 +155,7 @@ pub fn build_probe_response(
         &raw.host_results,
         config,
         raw.target_traceroute.as_ref(),
-        raw.control_traceroute.as_ref(),
+        raw.dpi_hop,
         raw.dns.as_ref(),
     );
     let target_hop =
@@ -197,6 +195,7 @@ pub fn build_probe_response(
         "verdicts": verdicts,
         "host_results": host_results,
         "target_hop": target_hop,
+        "dpi_hop": raw.dpi_hop,
         "dns": raw.dns,
     })
 }
@@ -205,7 +204,6 @@ async fn insert_probe_report(
     query_id: Uuid,
     response: &Value,
     target_traceroute: Option<&TcpTracerouteResult>,
-    control_traceroute: Option<&TcpTracerouteResult>,
     pool: &PgPool,
 ) -> Result<(), sqlx::Error> {
     let probe_id = response
@@ -223,7 +221,6 @@ async fn insert_probe_report(
         })
         .unwrap_or_else(|| vec!["uncertain"]);
     let (target_hop_count, target_trace_result) = traceroute_columns(target_traceroute);
-    let (control_hop_count, control_trace_result) = traceroute_columns(control_traceroute);
 
     let Some(probe_id) = probe_id else {
         warn!("api: ignoring probe report with non-numeric probe_id");
@@ -238,20 +235,16 @@ async fn insert_probe_report(
             verdicts,
             result,
             target_hop_count,
-            target_trace_result,
-            control_hop_count,
-            control_trace_result
+            target_trace_result
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (query_id, probe_id)
         DO UPDATE SET
             date = NOW(),
             verdicts = EXCLUDED.verdicts,
             result = EXCLUDED.result,
             target_hop_count = EXCLUDED.target_hop_count,
-            target_trace_result = EXCLUDED.target_trace_result,
-            control_hop_count = EXCLUDED.control_hop_count,
-            control_trace_result = EXCLUDED.control_trace_result
+            target_trace_result = EXCLUDED.target_trace_result
         "#,
     )
     .bind(query_id)
@@ -260,8 +253,6 @@ async fn insert_probe_report(
     .bind(response)
     .bind(target_hop_count)
     .bind(target_trace_result)
-    .bind(control_hop_count)
-    .bind(control_trace_result)
     .execute(pool)
     .await?;
 
@@ -299,22 +290,14 @@ fn build_probe_verdicts(
     results: &[HostProbeResult],
     config: &ProbeConfig,
     target_traceroute: Option<&TcpTracerouteResult>,
-    control_traceroute: Option<&TcpTracerouteResult>,
+    dpi_hop: Option<u8>,
     dns: Option<&reports::probe::DnsProbeResult>,
 ) -> Vec<&'static str> {
     let mut verdicts = Vec::new();
     let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
-    if let (
-        Some(TcpTracerouteResult {
-            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: target_hop },
-            ..
-        }),
-        Some(TcpTracerouteResult {
-            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: control_hop },
-            ..
-        }),
-    ) = (target_traceroute, control_traceroute)
-        && target_hop < control_hop
+    if dpi_hop.is_some()
+        && target_traceroute
+            .is_some_and(|traceroute| matches!(&traceroute.result, TcpTracerouteOutcome::Timeout))
     {
         verdicts.push("tspu_block");
     }
@@ -429,40 +412,38 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 mod tests {
     use super::*;
 
-    fn icmp_trace(hop: u8) -> TcpTracerouteResult {
-        TcpTracerouteResult {
-            target: "192.0.2.1".parse().unwrap(),
-            result: TcpTracerouteOutcome::IcmpTimeExceeded { hop },
-        }
-    }
-
     #[test]
-    fn tspu_block_requires_an_earlier_target_icmp_hop() {
-        let target = icmp_trace(3);
-        let control = icmp_trace(5);
+    fn tspu_block_requires_a_dpi_hop_and_post_dpi_timeout() {
+        let timeout = TcpTracerouteResult {
+            target: "192.0.2.1".parse().unwrap(),
+            result: TcpTracerouteOutcome::Timeout,
+        };
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
+            build_probe_verdicts(&[], &empty_config(), Some(&timeout), Some(4), None),
             vec!["tspu_block"]
         );
-
-        let target = icmp_trace(5);
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
+            build_probe_verdicts(&[], &empty_config(), Some(&timeout), None, None),
             vec!["ok"]
         );
     }
 
     #[test]
-    fn tspu_block_requires_two_icmp_outcomes() {
-        let target = TcpTracerouteResult {
-            target: "192.0.2.1".parse().unwrap(),
-            result: TcpTracerouteOutcome::Connected { hop: 2 },
-        };
-        let control = icmp_trace(5);
-        assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&target), Some(&control), None),
-            vec!["ok"]
-        );
+    fn any_post_dpi_response_clears_tspu_block() {
+        for result in [
+            TcpTracerouteOutcome::IcmpTimeExceeded { hop: 5 },
+            TcpTracerouteOutcome::Connected { hop: 5 },
+            TcpTracerouteOutcome::Rst { hop: 5 },
+        ] {
+            let target = TcpTracerouteResult {
+                target: "192.0.2.1".parse().unwrap(),
+                result,
+            };
+            assert_eq!(
+                build_probe_verdicts(&[], &empty_config(), Some(&target), Some(4), None),
+                vec!["ok"]
+            );
+        }
     }
 
     #[test]
@@ -501,10 +482,10 @@ mod tests {
             published_at: String::new(),
             hosts: vec![],
             traceroute_enabled: true,
-            control_hosts: vec![],
             dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
             dns_spoofing_provider_threshold:
                 reports::probe::default_dns_spoofing_provider_threshold(),
+            dpi_probe: None,
         }
     }
 }

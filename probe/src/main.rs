@@ -1,29 +1,34 @@
 mod dns;
+mod dpi_hop;
 mod sni;
 mod traceroute;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use futures::future::join_all;
-use log::{error, info, warn};
-use rand::seq::SliceRandom;
-use reports::probe::{ProbeConfig, ProbeResult, ProbeStatus, ProbeTask, TcpTracerouteOutcome};
+use log::{debug, error, info, warn};
+use reports::probe::{DpiProbeConfig, ProbeConfig, ProbeResult, ProbeStatus, ProbeTask};
 use rumqttc::{
     AsyncClient, Event, Incoming, LastWill, MqttOptions, NetworkOptions, QoS, Transport,
 };
-use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 const CONFIG_TOPIC: &str = "probe/config/v1";
+const MQTT_MAX_PACKET_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct LoadedProbeConfig {
     config: ProbeConfig,
-    control_hosts_v4: Vec<Ipv4Addr>,
-    control_hosts_v6: Vec<Ipv6Addr>,
+    dpi_hop_v4: Option<u8>,
+    dpi_hop_v6: Option<u8>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DpiHops {
+    v4: Option<u8>,
+    v6: Option<u8>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -47,14 +52,8 @@ struct Args {
     #[arg(long, env = "MAX_CONCURRENT_TASKS", default_value_t = 8)]
     max_concurrent_tasks: usize,
 
-    #[arg(long, env = "TRACEROUTE_MAX_HOPS", default_value_t = 5)]
-    traceroute_max_hops: u8,
-
     #[arg(long, env = "TRACEROUTE_RETRIES", default_value_t = 3)]
     traceroute_retries: u8,
-
-    #[arg(long, env = "TRACEROUTE_CONTROL_HOSTS", default_value_t = 3)]
-    traceroute_control_hosts: usize,
 }
 
 #[tokio::main]
@@ -64,14 +63,8 @@ async fn main() -> Result<()> {
     if args.max_concurrent_tasks == 0 {
         bail!("max_concurrent_tasks must be greater than zero");
     }
-    if args.traceroute_max_hops == 0 {
-        bail!("traceroute_max_hops must be greater than zero");
-    }
     if args.traceroute_retries == 0 {
         bail!("traceroute_retries must be greater than zero");
-    }
-    if args.traceroute_control_hosts == 0 {
-        bail!("traceroute_control_hosts must be greater than zero");
     }
 
     let status_topic = format!("probe/status/v1/{}", args.probe_id);
@@ -79,12 +72,15 @@ async fn main() -> Result<()> {
         online: false,
         probe_id: &args.probe_id,
         version: env!("CARGO_PKG_VERSION"),
+        dpi_hop_v4: None,
+        dpi_hop_v6: None,
     })?;
 
     let mut options = MqttOptions::new(&args.probe_id, &args.mqtt_host, args.mqtt_port);
     options.set_transport(mqtt_transport(&args.mqtt_host)?);
     options.set_credentials("probe", &args.probe_token);
     options.set_keep_alive(Duration::from_secs(10));
+    options.set_max_packet_size(MQTT_MAX_PACKET_SIZE, MQTT_MAX_PACKET_SIZE);
     options.set_last_will(LastWill::new(
         status_topic.clone(),
         offline_status,
@@ -100,7 +96,7 @@ async fn main() -> Result<()> {
     eventloop.set_network_options(network_options);
 
     wait_for_connection(&mut eventloop).await;
-    publish_status(&client, &status_topic, &args, true).await?;
+    publish_status(&client, &status_topic, &args, true, DpiHops::default()).await?;
     client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
     client
         .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
@@ -115,8 +111,15 @@ async fn main() -> Result<()> {
         match eventloop.poll().await {
             Ok(Event::Incoming(Incoming::Publish(publish))) => {
                 if publish.topic == CONFIG_TOPIC {
-                    if let Err(error) = update_config(&config, &publish.payload).await {
-                        warn!("failed to update probe config: {error}");
+                    match update_config(&config, &publish.payload).await {
+                        Ok(dpi_hops) => {
+                            if let Err(error) =
+                                publish_status(&client, &status_topic, &args, true, dpi_hops).await
+                            {
+                                warn!("failed to publish probe status with DPI hop: {error}");
+                            }
+                        }
+                        Err(error) => warn!("failed to update probe config: {error}"),
                     }
                 } else {
                     let client = client.clone();
@@ -159,7 +162,16 @@ async fn main() -> Result<()> {
             Err(error) => {
                 error!("mqtt connection error: {error}");
                 wait_for_connection(&mut eventloop).await;
-                publish_status(&client, &status_topic, &args, true).await?;
+                let dpi_hops =
+                    config
+                        .read()
+                        .await
+                        .as_ref()
+                        .map_or_else(DpiHops::default, |config| DpiHops {
+                            v4: config.dpi_hop_v4,
+                            v6: config.dpi_hop_v6,
+                        });
+                publish_status(&client, &status_topic, &args, true, dpi_hops).await?;
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
                 client
                     .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
@@ -183,7 +195,7 @@ fn mqtt_transport(mqtt_host: &str) -> Result<Transport> {
 async fn update_config(
     config: &Arc<RwLock<Option<LoadedProbeConfig>>>,
     payload: &[u8],
-) -> Result<()> {
+) -> Result<DpiHops> {
     let value: ProbeConfig = serde_json::from_slice(payload).context("decode probe config")?;
     if value.dns_samples_per_protocol == 0 {
         bail!("dns_samples_per_protocol must be greater than zero");
@@ -191,34 +203,103 @@ async fn update_config(
     if !(1..=4).contains(&value.dns_spoofing_provider_threshold) {
         bail!("dns_spoofing_provider_threshold must be between 1 and 4");
     }
-    let mut control_hosts_v4 = HashSet::new();
-    let mut control_hosts_v6 = HashSet::new();
-    if value.traceroute_enabled {
-        for domain in &value.control_hosts {
-            match tokio::net::lookup_host((domain.as_str(), 443)).await {
-                Ok(addresses) => {
-                    for address in addresses {
-                        match address.ip() {
-                            IpAddr::V4(address) => {
-                                control_hosts_v4.insert(address);
-                            }
-                            IpAddr::V6(address) => {
-                                control_hosts_v6.insert(address);
-                            }
-                        }
-                    }
-                }
-                Err(error) => warn!("failed to resolve control host {domain}: {error}"),
-            }
+    validate_dpi_probe_config(value.dpi_probe.as_ref())?;
+    let dpi_hops = measure_dpi_hops(value.dpi_probe.as_ref()).await;
+    let loaded = LoadedProbeConfig {
+        config: value,
+        dpi_hop_v4: dpi_hops.v4,
+        dpi_hop_v6: dpi_hops.v6,
+    };
+    debug!(
+        "measured DPI hops: IPv4={:?}, IPv6={:?}",
+        loaded.dpi_hop_v4, loaded.dpi_hop_v6
+    );
+    *config.write().await = Some(loaded);
+    info!("updated retained probe config");
+    Ok(dpi_hops)
+}
+
+fn validate_dpi_probe_config(config: Option<&DpiProbeConfig>) -> Result<()> {
+    let Some(config) = config else {
+        return Ok(());
+    };
+    if config.sni.trim().is_empty() {
+        bail!("dpi_probe.sni must not be empty");
+    }
+    if config.target_v4.port() == 0 {
+        bail!("dpi_probe.target_v4 port must be greater than zero");
+    }
+    if config.target_v6.port() == 0 {
+        bail!("dpi_probe.target_v6 port must be greater than zero");
+    }
+    if config.connect_timeout_ms == 0 {
+        bail!("dpi_probe.connect_timeout_ms must be greater than zero");
+    }
+    if config.hop_timeout_ms == 0 {
+        bail!("dpi_probe.hop_timeout_ms must be greater than zero");
+    }
+    if config.max_ttl == 0 {
+        bail!("dpi_probe.max_ttl must be greater than zero");
+    }
+    if config.post_dpi_hop_limit == 0 {
+        bail!("dpi_probe.post_dpi_hop_limit must be greater than zero");
+    }
+    Ok(())
+}
+
+async fn measure_dpi_hops(config: Option<&DpiProbeConfig>) -> DpiHops {
+    let Some(config) = config else {
+        debug!("DPI hop measurement is not configured");
+        return DpiHops::default();
+    };
+    let common = |target| dpi_hop::DpiHopProbeConfig {
+        target,
+        control_sni: config.sni.clone(),
+        max_ttl: config.max_ttl,
+        connect_timeout: Duration::from_millis(config.connect_timeout_ms),
+        hop_timeout: Duration::from_millis(config.hop_timeout_ms),
+    };
+    let (v4, v6) = tokio::join!(
+        measure_dpi_hop(common(config.target_v4.into())),
+        measure_dpi_hop(common(config.target_v6.into())),
+    );
+    DpiHops { v4, v6 }
+}
+
+async fn measure_dpi_hop(config: dpi_hop::DpiHopProbeConfig) -> Option<u8> {
+    let target = config.target;
+    match dpi_hop::detect_dpi_hop(config).await {
+        Ok(result) => dpi_hop_from_result(&result),
+        Err(error) => {
+            warn!("failed to measure DPI hop for {target}: {error}");
+            None
         }
     }
-    *config.write().await = Some(LoadedProbeConfig {
-        config: value,
-        control_hosts_v4: control_hosts_v4.into_iter().collect(),
-        control_hosts_v6: control_hosts_v6.into_iter().collect(),
-    });
-    info!("updated retained probe config");
-    Ok(())
+}
+
+fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
+    debug!(
+        "DPI probe completed: target={}, local={}, ClientHello={} bytes",
+        result.target, result.local_addr, result.client_hello_bytes
+    );
+    for hop in &result.hops {
+        debug!(
+            "DPI probe {} TTL {}: router={:?}, outcome={:?}",
+            result.target, hop.ttl, hop.router, hop.outcome
+        );
+    }
+    if let Some(closed_hop) = result
+        .hops
+        .iter()
+        .find(|hop| hop.outcome == dpi_hop::DpiHopProbeHopOutcome::TcpClosed)
+    {
+        warn!(
+            "DPI hop measurement for {} is invalid: TCP connection closed at TTL {}",
+            result.target, closed_hop.ttl
+        );
+        return None;
+    }
+    result.max_icmp_time_exceeded_ttl
 }
 
 async fn wait_for_connection(eventloop: &mut rumqttc::EventLoop) {
@@ -244,11 +325,14 @@ async fn publish_status(
     topic: &str,
     args: &Args,
     online: bool,
+    dpi_hops: DpiHops,
 ) -> Result<()> {
     let payload = serde_json::to_vec(&ProbeStatus {
         online,
         probe_id: &args.probe_id,
         version: env!("CARGO_PKG_VERSION"),
+        dpi_hop_v4: dpi_hops.v4,
+        dpi_hop_v6: dpi_hops.v6,
     })?;
 
     client
@@ -283,25 +367,15 @@ async fn handle_task(
     let traceroute_enabled = config
         .as_ref()
         .is_some_and(|config| config.config.traceroute_enabled);
-    let control_targets = config.as_ref().map_or_else(Vec::new, |config| {
-        if !traceroute_enabled {
-            return Vec::new();
-        }
-        let mut rng = rand::thread_rng();
-        match task.ip {
-            IpAddr::V4(_) => config
-                .control_hosts_v4
-                .choose_multiple(&mut rng, args.traceroute_control_hosts)
-                .copied()
-                .map(IpAddr::V4)
-                .collect(),
-            IpAddr::V6(_) => config
-                .control_hosts_v6
-                .choose_multiple(&mut rng, args.traceroute_control_hosts)
-                .copied()
-                .map(IpAddr::V6)
-                .collect(),
-        }
+    let dpi_hop = config.as_ref().and_then(|config| match task.ip {
+        IpAddr::V4(_) => config.dpi_hop_v4,
+        IpAddr::V6(_) => config.dpi_hop_v6,
+    });
+    let traceroute_range = config.as_ref().and_then(|config| {
+        let hop_limit = config.config.dpi_probe.as_ref()?.post_dpi_hop_limit;
+        dpi_hop?
+            .checked_add(1)
+            .map(|start_hop| (start_hop, hop_limit))
     });
     let sni_check = sni::check_sni(
         config.as_ref().map(|config| &config.config),
@@ -311,11 +385,12 @@ async fn handle_task(
         task.timeout_ms,
     );
     let target_traceroute = async {
-        if traceroute_enabled {
-            traceroute::tcp_traceroute(task.ip, args.traceroute_max_hops, args.traceroute_retries)
-                .await
-        } else {
-            None
+        match (traceroute_enabled, traceroute_range) {
+            (true, Some((start_hop, hop_limit))) => {
+                traceroute::tcp_traceroute(task.ip, start_hop, hop_limit, args.traceroute_retries)
+                    .await
+            }
+            _ => None,
         }
     };
     let dns_samples_per_protocol = config
@@ -333,22 +408,7 @@ async fn handle_task(
         dns_samples_per_protocol,
         dns_spoofing_provider_threshold,
     );
-    let control_traceroute = async {
-        join_all(control_targets.into_iter().map(|target| {
-            traceroute::tcp_traceroute(target, args.traceroute_max_hops, args.traceroute_retries)
-        }))
-        .await
-        .into_iter()
-        .flatten()
-        .min_by_key(|trace| match trace.result {
-            TcpTracerouteOutcome::Rst { hop }
-            | TcpTracerouteOutcome::Connected { hop }
-            | TcpTracerouteOutcome::IcmpTimeExceeded { hop } => hop,
-            TcpTracerouteOutcome::Timeout => u8::MAX,
-        })
-    };
-    let (responses, target_traceroute, control_traceroute, dns) =
-        tokio::join!(sni_check, target_traceroute, control_traceroute, dns_check);
+    let (responses, target_traceroute, dns) = tokio::join!(sni_check, target_traceroute, dns_check);
     let responses = responses?;
 
     client
@@ -359,10 +419,71 @@ async fn handle_task(
             serde_json::to_vec(&ProbeResult {
                 responses,
                 target_traceroute,
-                control_traceroute,
+                dpi_hop,
                 dns,
             })?,
         )
         .await
         .context("publish probe result")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_separate_dpi_targets() {
+        let config: ProbeConfig = serde_json::from_value(serde_json::json!({
+            "version": "1",
+            "task_timeout_ms": 15_000,
+            "published_at": "2026-08-21T00:00:00Z",
+            "hosts": [],
+            "dpi_probe": {
+                "sni": "example.com",
+                "target_v4": "203.0.113.10:443",
+                "target_v6": "[2001:db8::10]:443",
+                "connect_timeout_ms": 5_000,
+                "hop_timeout_ms": 1_000,
+                "max_ttl": 15
+            }
+        }))
+        .unwrap();
+        let dpi = config.dpi_probe.unwrap();
+
+        assert_eq!(dpi.target_v4.to_string(), "203.0.113.10:443");
+        assert_eq!(dpi.target_v6.to_string(), "[2001:db8::10]:443");
+        assert_eq!(dpi.post_dpi_hop_limit, 3);
+    }
+
+    #[test]
+    fn status_payload_contains_separate_dpi_hops() {
+        let status = ProbeStatus {
+            online: true,
+            probe_id: "probe-1",
+            version: "1.0.0",
+            dpi_hop_v4: Some(4),
+            dpi_hop_v6: Some(6),
+        };
+        let value = serde_json::to_value(status).unwrap();
+
+        assert_eq!(value["dpi_hop_v4"], 4);
+        assert_eq!(value["dpi_hop_v6"], 6);
+    }
+
+    #[test]
+    fn tcp_closed_invalidates_only_its_measurement() {
+        let result = dpi_hop::DpiHopProbeResult {
+            target: "[2001:db8::10]:443".parse().unwrap(),
+            local_addr: "[2001:db8::1]:45000".parse().unwrap(),
+            client_hello_bytes: 256,
+            max_icmp_time_exceeded_ttl: Some(4),
+            hops: vec![dpi_hop::DpiHopProbeHop {
+                ttl: 5,
+                router: None,
+                outcome: dpi_hop::DpiHopProbeHopOutcome::TcpClosed,
+            }],
+        };
+
+        assert_eq!(dpi_hop_from_result(&result), None);
+    }
 }

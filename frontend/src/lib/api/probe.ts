@@ -42,6 +42,7 @@ export type ProbeResult = {
 	)[];
 	host_results: ProbeHostResult[] | null;
 	target_hop: number | null;
+	dpi_hop: number | null;
 	dns: {
 		spoofing_detected: boolean;
 		suspicious_provider_count: number;

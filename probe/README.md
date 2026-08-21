@@ -166,12 +166,10 @@ docker run --rm \
 | `--probe-id`, `PROBE_ID` | ID сканера. | обязательно |
 | `--probe-token`, `PROBE_TOKEN` | Секретный токен сканера. | обязательно |
 | `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `8` |
-| `--traceroute-max-hops`, `TRACEROUTE_MAX_HOPS` | Максимальный TTL для TCP traceroute. | `5` |
 | `--traceroute-retries`, `TRACEROUTE_RETRIES` | Количество одновременных TCP-попыток на каждом TTL. | `3` |
-| `--traceroute-control-hosts`, `TRACEROUTE_CONTROL_HOSTS` | Максимальное количество случайных контрольных IP для одновременной трассировки. | `3` |
 | `RUST_LOG` | Уровень логирования. | `info` |
 
-`MAX_CONCURRENT_TASKS`, `TRACEROUTE_MAX_HOPS`, `TRACEROUTE_RETRIES` и `TRACEROUTE_CONTROL_HOSTS` должны быть больше нуля. Для получения ICMP-ответов traceroute процессу требуется capability `CAP_NET_RAW`; systemd unit и Docker-образ настраивают её автоматически.
+`MAX_CONCURRENT_TASKS` и `TRACEROUTE_RETRIES` должны быть больше нуля. Для получения ICMP-ответов traceroute процессу требуется capability `CAP_NET_RAW`; systemd unit и Docker-образ настраивают её автоматически.
 
 ## Как работает проверка
 
@@ -180,7 +178,7 @@ docker run --rm \
 1. публикует retained-статус `online` в MQTT;
 2. подписывается на конфигурацию динамического сканирования;
 3. получает задания на проверку доменов и IP-адресов;
-4. параллельно запускает SNI-проверки (для доменов), TCP traceroute до цели и контрольный TCP traceroute;
+4. параллельно запускает SNI-проверки (для доменов) и TCP traceroute до цели, начиная со следующего после DPI узла;
 5. отправляет результат обратно в Cheburcheck.
 
 Для каждого тестового хоста сканер открывает TCP-соединение, начинает TLS-handshake с проверяемым доменом в SNI, затем отправляет простой HTTP GET-запрос.
