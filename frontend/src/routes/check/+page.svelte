@@ -107,7 +107,10 @@ const error = $derived(
 );
 const liveVerdict = $derived(
 	checkQuery.data && probeQuery.data
-		? selectProbeVerdict(probeQuery.data.probes, checkQuery.data.blocked)
+		? selectProbeVerdict(
+				probeQuery.data.probes,
+				checkQuery.data.providers.length > 0,
+			)
 		: null,
 );
 </script>
@@ -133,7 +136,7 @@ const liveVerdict = $derived(
 		<ProbeTable
 			probes={probeQuery.data.probes}
 			status={probeQuery.data.status}
-			isStaticBlocked={checkQuery.data.blocked}
+			isStaticCdn={checkQuery.data.providers.length > 0}
 		/>
 	{/if}
 

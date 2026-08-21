@@ -20,11 +20,11 @@ import {
 let {
 	probes,
 	status,
-	isStaticBlocked,
+	isStaticCdn,
 }: {
 	probes: ProbeResult[];
 	status: ProbeStatus;
-	isStaticBlocked: boolean;
+	isStaticCdn: boolean;
 } = $props();
 
 let expandedRows = $state<Record<string, boolean>>({});
@@ -175,7 +175,7 @@ const verdictStyles = {
 				</thead>
 				<tbody>
 					{#each probes as probe (probe.probe_id)}
-						{@const verdicts = displayProbeVerdicts(probe, isStaticBlocked)}
+						{@const verdicts = displayProbeVerdicts(probe, isStaticCdn)}
 						{@const isExpanded = !!expandedRows[probe.probe_id]}
 						<tr
 							class="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors cursor-pointer select-none"

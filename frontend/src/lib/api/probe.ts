@@ -58,10 +58,10 @@ export type ProbeResult = {
 
 export function displayProbeVerdicts(
 	probe: ProbeResult,
-	isStaticBlocked: boolean,
+	isStaticCdn: boolean,
 ): DisplayProbeVerdict[] {
 	return probe.verdicts.map((verdict) =>
-		isStaticBlocked && probe.host_results?.length !== 0 && verdict === "ok"
+		isStaticCdn && probe.host_results?.length !== 0 && verdict === "ok"
 			? "cdn_block"
 			: verdict,
 	);
@@ -79,15 +79,13 @@ const verdictPriority: DisplayProbeVerdict[] = [
 
 export function selectProbeVerdict(
 	probes: ProbeResult[],
-	isStaticBlocked: boolean,
+	isStaticCdn: boolean,
 ): ResolvedProbeVerdict | null {
 	if (probes.length === 0) return null;
 
 	const votes = new Map<DisplayProbeVerdict, number>();
 	for (const probe of probes) {
-		for (const verdict of new Set(
-			displayProbeVerdicts(probe, isStaticBlocked),
-		)) {
+		for (const verdict of new Set(displayProbeVerdicts(probe, isStaticCdn))) {
 			votes.set(verdict, (votes.get(verdict) ?? 0) + 1);
 		}
 	}
