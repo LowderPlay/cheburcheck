@@ -13,7 +13,7 @@ import {
 	ShieldCheck,
 } from "@lucide/svelte";
 import type { CheckResult } from "$lib/api/check";
-import type { DisplayProbeVerdict } from "$lib/api/probe";
+import type { ResolvedProbeVerdict } from "$lib/api/probe";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
@@ -21,15 +21,15 @@ import ResultStringList from "./result/ResultStringList.svelte";
 import ResultTargetCard from "./result/ResultTargetCard.svelte";
 
 type Provider = { name: string; networks: { cidr: string }[] };
-type ResultTheme = "blocked" | "clean" | "whitelist" | "uncertain";
-type ResultVerdict = DisplayProbeVerdict | "blocked";
+type ResultTheme = "blocked" | "clean" | "whitelist";
+type ResultVerdict = ResolvedProbeVerdict | "blocked";
 
 let {
 	result,
 	probeVerdict = null,
 }: {
 	result: CheckResult;
-	probeVerdict?: DisplayProbeVerdict | null;
+	probeVerdict?: ResolvedProbeVerdict | null;
 } = $props();
 
 const valueClass = "text-right text-sm font-medium text-neutral-200";
@@ -43,26 +43,20 @@ const staticVerdict = $derived<ResultVerdict>(
 			? "blocked"
 			: "ok",
 );
-const verdict = $derived<ResultVerdict>(
-	probeVerdict && probeVerdict !== "uncertain" ? probeVerdict : staticVerdict,
-);
+const verdict = $derived<ResultVerdict>(probeVerdict ?? staticVerdict);
 const theme = $derived<ResultTheme>(
 	verdict === "whitelist"
 		? "whitelist"
 		: verdict === "ok"
 			? "clean"
-			: verdict === "uncertain"
-				? "uncertain"
-				: "blocked",
+			: "blocked",
 );
 const panelClass = $derived(
 	theme === "whitelist"
 		? "border-yellow-900/30 bg-[#2e2d05]/10"
 		: theme === "blocked"
 			? "border-red-900/30 bg-[#450a0a]/10"
-			: theme === "clean"
-				? "border-green-900/30 bg-[#052e16]/10"
-				: "border-neutral-700 bg-neutral-900/20",
+			: "border-green-900/30 bg-[#052e16]/10",
 );
 const reasonHeaderClass = $derived(
 	theme === "whitelist"

@@ -1,13 +1,8 @@
 <script lang="ts">
-import {
-	CircleQuestionMark,
-	ShieldAlert,
-	ShieldCheck,
-	ShieldX,
-} from "@lucide/svelte";
-import type { DisplayProbeVerdict } from "$lib/api/probe";
+import { ShieldAlert, ShieldCheck, ShieldX } from "@lucide/svelte";
+import type { ResolvedProbeVerdict } from "$lib/api/probe";
 
-type ResultVerdict = DisplayProbeVerdict | "blocked";
+type ResultVerdict = ResolvedProbeVerdict | "blocked";
 
 let {
 	verdict,
@@ -45,10 +40,6 @@ const labels: Record<ResultVerdict, { title: string; subtitle: string }> = {
 		title: "Не ограничен",
 		subtitle: "Ограничений не обнаружено",
 	},
-	uncertain: {
-		title: "Неясно",
-		subtitle: "Сканеры не смогли определить доступность ресурса",
-	},
 };
 const title = $derived(labels[verdict].title);
 const subtitle = $derived(labels[verdict].subtitle);
@@ -57,18 +48,14 @@ const accentClass = $derived(
 		? "text-[#f0b100]"
 		: verdict === "ok"
 			? "text-green-500"
-			: verdict === "uncertain"
-				? "text-neutral-400"
-				: "text-red-500",
+			: "text-red-500",
 );
 const StatusIcon = $derived(
 	verdict === "whitelist"
 		? ShieldAlert
 		: verdict === "ok"
 			? ShieldCheck
-			: verdict === "uncertain"
-				? CircleQuestionMark
-				: ShieldX,
+			: ShieldX,
 );
 </script>
 

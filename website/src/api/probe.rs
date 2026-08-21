@@ -293,15 +293,33 @@ fn build_probe_verdicts(
     dpi_hop: Option<u8>,
     dns: Option<&reports::probe::DnsProbeResult>,
 ) -> Vec<&'static str> {
-    let mut verdicts = Vec::new();
-    let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
-    if dpi_hop.is_some()
-        && target_traceroute
-            .is_some_and(|traceroute| matches!(&traceroute.result, TcpTracerouteOutcome::Timeout))
-    {
-        verdicts.push("tspu_block");
+    if results.is_empty() && target_traceroute.is_none() && dns.is_none() {
+        return vec!["uncertain"];
     }
 
+    let tspu_block = dpi_hop.is_some()
+        && target_traceroute
+            .is_some_and(|traceroute| matches!(&traceroute.result, TcpTracerouteOutcome::Timeout));
+    let host_verdict = build_host_verdict(results, config);
+    let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
+
+    let mut verdicts = [
+        tspu_block.then_some("tspu_block"),
+        (!matches!(host_verdict, "ok" | "uncertain")).then_some(host_verdict),
+        dns_spoofing.then_some("dns_spoofing"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    if verdicts.is_empty() {
+        verdicts.push(host_verdict);
+    }
+
+    verdicts
+}
+
+fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'static str {
     let matched = results
         .iter()
         .filter_map(|result| {
@@ -313,7 +331,7 @@ fn build_probe_verdicts(
         })
         .collect::<Vec<_>>();
 
-    let host_verdict = if results.is_empty() {
+    if results.is_empty() {
         "ok"
     } else if matched.is_empty() {
         "uncertain"
@@ -365,19 +383,7 @@ fn build_probe_verdicts(
         } else {
             "uncertain"
         }
-    };
-
-    if !matches!(host_verdict, "ok" | "uncertain") {
-        verdicts.push(host_verdict);
     }
-    if dns_spoofing {
-        verdicts.push("dns_spoofing");
-    }
-    if verdicts.is_empty() {
-        verdicts.push(host_verdict);
-    }
-
-    verdicts
 }
 
 fn publish_error_status(error: PublishError) -> Status {
@@ -411,6 +417,14 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_checks_returns_uncertain() {
+        assert_eq!(
+            build_probe_verdicts(&[], &empty_config(), None, None, None),
+            vec!["uncertain"]
+        );
+    }
 
     #[test]
     fn tspu_block_requires_a_dpi_hop_and_post_dpi_timeout() {

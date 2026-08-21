@@ -11,7 +11,6 @@ import {
 	TriangleAlert,
 } from "@lucide/svelte";
 import {
-	type DisplayProbeVerdict,
 	type DnsObservation,
 	displayProbeVerdicts,
 	type ProbeResult,
@@ -117,14 +116,6 @@ const verdictStyles = {
 		border: "border-neutral-400/20",
 	},
 };
-
-type VerdictStyle = keyof typeof verdictStyles;
-
-const probeVerdicts = (
-	probe: ProbeResult,
-	isStaticBlocked: boolean,
-): VerdictStyle[] =>
-	displayProbeVerdicts(probe, isStaticBlocked) satisfies DisplayProbeVerdict[];
 </script>
 
 <div class="mt-8 space-y-4">
@@ -184,7 +175,7 @@ const probeVerdicts = (
 				</thead>
 				<tbody>
 					{#each probes as probe (probe.probe_id)}
-						{@const verdicts = probeVerdicts(probe, isStaticBlocked)}
+						{@const verdicts = displayProbeVerdicts(probe, isStaticBlocked)}
 						{@const isExpanded = !!expandedRows[probe.probe_id]}
 						<tr
 							class="border-b border-neutral-800/50 hover:bg-neutral-800/20 transition-colors cursor-pointer select-none"

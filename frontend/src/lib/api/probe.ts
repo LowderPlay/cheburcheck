@@ -35,6 +35,7 @@ export type ProbeVerdict =
 	| "ok";
 
 export type DisplayProbeVerdict = ProbeVerdict | "cdn_block";
+export type ResolvedProbeVerdict = Exclude<DisplayProbeVerdict, "uncertain">;
 
 export type ProbeResult = {
 	job_id: string;
@@ -79,7 +80,7 @@ const verdictPriority: DisplayProbeVerdict[] = [
 export function selectProbeVerdict(
 	probes: ProbeResult[],
 	isStaticBlocked: boolean,
-): DisplayProbeVerdict | null {
+): ResolvedProbeVerdict | null {
 	if (probes.length === 0) return null;
 
 	const votes = new Map<DisplayProbeVerdict, number>();
@@ -101,7 +102,7 @@ export function selectProbeVerdict(
 		}
 	}
 
-	return winner;
+	return winner === "uncertain" ? null : winner;
 }
 
 export type ProbeStatus = {
