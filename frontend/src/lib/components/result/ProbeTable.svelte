@@ -224,7 +224,7 @@ const verdictStyles = {
 										>
 											<TriangleAlert size={18} class="shrink-0 text-red-400" />
 											<span class="font-bold">
-												Блокировка ТСПУ обнаружена после
+												Блокировка на ТСПУ обнаружена после
 												{probe.dpi_hop}
 												прыжка
 											</span>
