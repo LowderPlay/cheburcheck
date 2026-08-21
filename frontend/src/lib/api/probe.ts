@@ -26,20 +26,23 @@ export type DnsObservation = {
 		| { type: "Error"; message: string };
 };
 
+export type ProbeVerdict =
+	| "uncertain"
+	| "dns_spoofing"
+	| "sni_block"
+	| "tspu_block"
+	| "whitelist"
+	| "ok";
+
+export type DisplayProbeVerdict = ProbeVerdict | "cdn_block";
+
 export type ProbeResult = {
 	job_id: string;
 	probe_id: string;
 	region?: string | null;
 	provider?: string | null;
 	asn?: string | null;
-	verdicts: (
-		| "uncertain"
-		| "dns_spoofing"
-		| "sni_block"
-		| "tspu_block"
-		| "whitelist"
-		| "ok"
-	)[];
+	verdicts: ProbeVerdict[];
 	host_results: ProbeHostResult[] | null;
 	target_hop: number | null;
 	dpi_hop: number | null;
@@ -51,6 +54,55 @@ export type ProbeResult = {
 		observations: DnsObservation[];
 	} | null;
 };
+
+export function displayProbeVerdicts(
+	probe: ProbeResult,
+	isStaticBlocked: boolean,
+): DisplayProbeVerdict[] {
+	return probe.verdicts.map((verdict) =>
+		isStaticBlocked && probe.host_results?.length !== 0 && verdict === "ok"
+			? "cdn_block"
+			: verdict,
+	);
+}
+
+const verdictPriority: DisplayProbeVerdict[] = [
+	"tspu_block",
+	"sni_block",
+	"dns_spoofing",
+	"whitelist",
+	"cdn_block",
+	"ok",
+	"uncertain",
+];
+
+export function selectProbeVerdict(
+	probes: ProbeResult[],
+	isStaticBlocked: boolean,
+): DisplayProbeVerdict | null {
+	if (probes.length === 0) return null;
+
+	const votes = new Map<DisplayProbeVerdict, number>();
+	for (const probe of probes) {
+		for (const verdict of new Set(
+			displayProbeVerdicts(probe, isStaticBlocked),
+		)) {
+			votes.set(verdict, (votes.get(verdict) ?? 0) + 1);
+		}
+	}
+
+	let winner: DisplayProbeVerdict | null = null;
+	let winningVotes = 0;
+	for (const verdict of verdictPriority) {
+		const count = votes.get(verdict) ?? 0;
+		if (count > winningVotes) {
+			winner = verdict;
+			winningVotes = count;
+		}
+	}
+
+	return winner;
+}
 
 export type ProbeStatus = {
 	id: string;

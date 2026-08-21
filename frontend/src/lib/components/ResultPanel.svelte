@@ -13,6 +13,7 @@ import {
 	ShieldCheck,
 } from "@lucide/svelte";
 import type { CheckResult } from "$lib/api/check";
+import type { DisplayProbeVerdict } from "$lib/api/probe";
 import DetailRow from "./DetailRow.svelte";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
@@ -20,31 +21,48 @@ import ResultStringList from "./result/ResultStringList.svelte";
 import ResultTargetCard from "./result/ResultTargetCard.svelte";
 
 type Provider = { name: string; networks: { cidr: string }[] };
-type ResultTheme = "blocked" | "clean" | "whitelist";
+type ResultTheme = "blocked" | "clean" | "whitelist" | "uncertain";
+type ResultVerdict = DisplayProbeVerdict | "blocked";
 
 let {
 	result,
+	probeVerdict = null,
 }: {
 	result: CheckResult;
+	probeVerdict?: DisplayProbeVerdict | null;
 } = $props();
 
 const valueClass = "text-right text-sm font-medium text-neutral-200";
 const alertValueClass = `${valueClass} text-red-500`;
 const successValueClass = `${valueClass} text-green-500`;
 
-const theme = $derived<ResultTheme>(
+const staticVerdict = $derived<ResultVerdict>(
 	result.whitelist && !result.domain
 		? "whitelist"
 		: result.found
 			? "blocked"
-			: "clean",
+			: "ok",
+);
+const verdict = $derived<ResultVerdict>(
+	probeVerdict && probeVerdict !== "uncertain" ? probeVerdict : staticVerdict,
+);
+const theme = $derived<ResultTheme>(
+	verdict === "whitelist"
+		? "whitelist"
+		: verdict === "ok"
+			? "clean"
+			: verdict === "uncertain"
+				? "uncertain"
+				: "blocked",
 );
 const panelClass = $derived(
 	theme === "whitelist"
 		? "border-yellow-900/30 bg-[#2e2d05]/10"
 		: theme === "blocked"
 			? "border-red-900/30 bg-[#450a0a]/10"
-			: "border-green-900/30 bg-[#052e16]/10",
+			: theme === "clean"
+				? "border-green-900/30 bg-[#052e16]/10"
+				: "border-neutral-700 bg-neutral-900/20",
 );
 const reasonHeaderClass = $derived(
 	theme === "whitelist"
@@ -67,7 +85,7 @@ const providerCidrs = (provider: Provider) =>
 <div class="mt-8 space-y-6">
 	<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 		<div class={`border p-4 rounded-lg flex items-center ${panelClass}`}>
-			<ResultStatusHeader {theme} blocked={result.blocked} />
+			<ResultStatusHeader {verdict} />
 		</div>
 		<ResultTargetCard
 			targetType={result.targetType}

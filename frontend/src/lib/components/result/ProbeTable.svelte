@@ -10,7 +10,13 @@ import {
 	ShieldCheck,
 	TriangleAlert,
 } from "@lucide/svelte";
-import type { DnsObservation, ProbeResult, ProbeStatus } from "$lib/api/probe";
+import {
+	type DisplayProbeVerdict,
+	type DnsObservation,
+	displayProbeVerdicts,
+	type ProbeResult,
+	type ProbeStatus,
+} from "$lib/api/probe";
 
 let {
 	probes,
@@ -114,16 +120,11 @@ const verdictStyles = {
 
 type VerdictStyle = keyof typeof verdictStyles;
 
-function probeVerdicts(
+const probeVerdicts = (
 	probe: ProbeResult,
 	isStaticBlocked: boolean,
-): VerdictStyle[] {
-	return probe.verdicts.map((verdict) =>
-		isStaticBlocked && probe.host_results?.length !== 0 && verdict === "ok"
-			? "cdn_block"
-			: verdict,
-	);
-}
+): VerdictStyle[] =>
+	displayProbeVerdicts(probe, isStaticBlocked) satisfies DisplayProbeVerdict[];
 </script>
 
 <div class="mt-8 space-y-4">
@@ -204,23 +205,14 @@ function probeVerdicts(
 								<div class="flex flex-wrap gap-1.5">
 									{#each verdicts as verdict}
 										{@const style = verdictStyles[verdict]}
-										{#if verdict === "whitelist"}
-											<a
-												href="/kb/whitelist"
-												onclick={(event) => event.stopPropagation()}
-												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-colors hover:bg-amber-500/20 hover:border-amber-500/50 hover:text-amber-400`}
-											>
-												<style.icon size={14} />
-												{style.text}
-											</a>
-										{:else}
-											<div
-												class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold`}
-											>
-												<style.icon size={14} />
-												{style.text}
-											</div>
-										{/if}
+										<a
+											href={verdict === "whitelist" ? "/kb/whitelist" : "/kb/probing"}
+											onclick={(event) => event.stopPropagation()}
+											class={`inline-flex items-center gap-1.5 px-2 py-1 rounded border ${style.bg} ${style.border} ${style.class} text-xs font-bold transition-opacity hover:opacity-80`}
+										>
+											<style.icon size={14} />
+											{style.text}
+										</a>
 									{/each}
 								</div>
 							</td>
