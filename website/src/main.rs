@@ -100,6 +100,7 @@ async fn rocket() -> _ {
                 api::healthcheck,
                 api::feedback,
                 api::get_system_status,
+                api::node_stats,
                 whitelist::histogram
             ],
         )

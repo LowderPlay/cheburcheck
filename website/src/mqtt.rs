@@ -8,7 +8,7 @@ use rumqttc::{AsyncClient, Event as MqttEvent, Incoming, MqttOptions, QoS};
 use serde::Deserialize;
 use sqlx::types::Uuid;
 use sqlx::types::chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -53,13 +53,22 @@ impl fmt::Display for PublishError {
 pub struct MqttPublisher {
     client: Option<AsyncClient>,
     sessions: Arc<rocket::tokio::sync::RwLock<HashMap<String, ProbeResultSender>>>,
-    online_probes: Arc<rocket::tokio::sync::RwLock<HashSet<String>>>,
+    probe_statuses: ProbeStatuses,
     probe_config: Arc<ProbeConfig>,
     task_timeout_ms: u64,
 }
 
 type ProbeResultSender = rocket::tokio::sync::broadcast::Sender<ProbeResultEvent>;
 pub type ProbeResultReceiver = rocket::tokio::sync::broadcast::Receiver<ProbeResultEvent>;
+type ProbeStatuses = Arc<rocket::tokio::sync::RwLock<HashMap<String, ProbeStatusSnapshot>>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbeStatusSnapshot {
+    pub online: bool,
+    pub version: String,
+    pub dpi_hop_v4: Option<u8>,
+    pub dpi_hop_v6: Option<u8>,
+}
 
 #[derive(Deserialize)]
 struct ProbeHostsFile {
@@ -87,7 +96,7 @@ struct ProbeHostEntry {
 impl MqttPublisher {
     pub fn start_from_env() -> Self {
         let sessions = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
-        let online_probes = Arc::new(rocket::tokio::sync::RwLock::new(HashSet::new()));
+        let probe_statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
         let task_timeout_ms = task_timeout_ms_from_env();
         let probe_config = Arc::new(load_probe_config(task_timeout_ms).unwrap_or_else(|error| {
             warn!("failed to load probe config: {error}");
@@ -110,7 +119,7 @@ impl MqttPublisher {
                 return Self {
                     client: None,
                     sessions,
-                    online_probes,
+                    probe_statuses,
                     probe_config,
                     task_timeout_ms: task_timeout_ms_from_env(),
                 };
@@ -132,7 +141,7 @@ impl MqttPublisher {
 
         let (client, mut eventloop) = AsyncClient::new(options, 100);
         let event_sessions = sessions.clone();
-        let event_online_probes = online_probes.clone();
+        let event_probe_statuses = probe_statuses.clone();
         let config_client = client.clone();
         let event_probe_config = probe_config.clone();
         rocket::tokio::spawn(async move {
@@ -149,7 +158,7 @@ impl MqttPublisher {
                         dispatch_probe_result(&event_sessions, &publish.topic, &publish.payload)
                             .await;
                         dispatch_probe_status(
-                            &event_online_probes,
+                            &event_probe_statuses,
                             &publish.topic,
                             &publish.payload,
                         )
@@ -178,7 +187,7 @@ impl MqttPublisher {
         Self {
             client: Some(client),
             sessions,
-            online_probes,
+            probe_statuses,
             probe_config,
             task_timeout_ms,
         }
@@ -189,7 +198,16 @@ impl MqttPublisher {
     }
 
     pub async fn online_probe_count(&self) -> usize {
-        self.online_probes.read().await.len()
+        self.probe_statuses
+            .read()
+            .await
+            .values()
+            .filter(|status| status.online)
+            .count()
+    }
+
+    pub async fn probe_statuses(&self) -> HashMap<String, ProbeStatusSnapshot> {
+        self.probe_statuses.read().await.clone()
     }
 
     pub fn probe_config(&self) -> Arc<ProbeConfig> {
@@ -320,17 +338,13 @@ fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> 
     })
 }
 
-async fn dispatch_probe_status(
-    online_probes: &Arc<rocket::tokio::sync::RwLock<HashSet<String>>>,
-    topic: &str,
-    payload: &[u8],
-) {
+async fn dispatch_probe_status(probe_statuses: &ProbeStatuses, topic: &str, payload: &[u8]) {
     let Some(probe_id) = parse_probe_status_topic(topic) else {
         return;
     };
 
     if payload.is_empty() {
-        online_probes.write().await.remove(probe_id);
+        probe_statuses.write().await.remove(probe_id);
         return;
     }
 
@@ -342,12 +356,23 @@ async fn dispatch_probe_status(
         }
     };
 
-    let mut online_probes = online_probes.write().await;
-    if status.online {
-        online_probes.insert(probe_id.to_string());
-    } else {
-        online_probes.remove(probe_id);
+    if status.probe_id != probe_id {
+        warn!(
+            "ignoring probe status on {topic}: payload probe_id {} does not match topic",
+            status.probe_id
+        );
+        return;
     }
+
+    probe_statuses.write().await.insert(
+        probe_id.to_string(),
+        ProbeStatusSnapshot {
+            online: status.online,
+            version: status.version.to_string(),
+            dpi_hop_v4: status.dpi_hop_v4,
+            dpi_hop_v6: status.dpi_hop_v6,
+        },
+    );
 }
 
 async fn dispatch_probe_result(
@@ -416,4 +441,62 @@ fn task_timeout_ms_from_env() -> u64 {
         .ok()
         .and_then(|timeout| timeout.parse().ok())
         .unwrap_or(15_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rocket::async_test]
+    async fn status_snapshot_keeps_offline_node_metadata() {
+        let statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
+
+        dispatch_probe_status(
+            &statuses,
+            "probe/status/v1/42",
+            br#"{"online":false,"probe_id":"42","version":"1.2.3","dpi_hop_v4":4,"dpi_hop_v6":6}"#,
+        )
+        .await;
+
+        assert_eq!(
+            statuses.read().await.get("42"),
+            Some(&ProbeStatusSnapshot {
+                online: false,
+                version: "1.2.3".to_string(),
+                dpi_hop_v4: Some(4),
+                dpi_hop_v6: Some(6),
+            })
+        );
+    }
+
+    #[rocket::async_test]
+    async fn empty_retained_status_removes_snapshot() {
+        let statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::from([(
+            "42".to_string(),
+            ProbeStatusSnapshot {
+                online: true,
+                version: "1.2.3".to_string(),
+                dpi_hop_v4: None,
+                dpi_hop_v6: None,
+            },
+        )])));
+
+        dispatch_probe_status(&statuses, "probe/status/v1/42", b"").await;
+
+        assert!(statuses.read().await.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn mismatched_payload_id_is_ignored() {
+        let statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
+
+        dispatch_probe_status(
+            &statuses,
+            "probe/status/v1/42",
+            br#"{"online":true,"probe_id":"7","version":"1.2.3"}"#,
+        )
+        .await;
+
+        assert!(statuses.read().await.is_empty());
+    }
 }
