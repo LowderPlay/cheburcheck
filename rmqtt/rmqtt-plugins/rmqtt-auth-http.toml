@@ -14,7 +14,7 @@ Connection = "keep-alive"
 url = "http://website:8000/mqtt/auth"
 method = "post"
 headers = { content-type = "application/x-www-form-urlencoded" }
-params = { clientid = "%c", username = "%u", password = "%P", protocol = "%r" }
+params = { clientid = "%c", username = "%u", password = "%P", ipaddr = "%a", protocol = "%r" }
 
 [http_acl_req]
 url = "http://website:8000/mqtt/acl"

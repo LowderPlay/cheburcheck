@@ -8,6 +8,7 @@ pub struct MqttAuthRequest<'r> {
     username: &'r str,
     clientid: &'r str,
     password: &'r str,
+    ipaddr: &'r str,
     protocol: Option<&'r str>,
 }
 
@@ -70,15 +71,25 @@ pub async fn auth(
         return Json(MqttAuthResponse::deny());
     }
 
-    let reporter_id =
-        sqlx::query_scalar::<_, i32>("SELECT id FROM reporters WHERE token = $1 LIMIT 1")
-            .bind(request.password)
-            .fetch_optional(&**pool)
-            .await
-            .ok()
-            .flatten();
+    let Ok(reporter_id) = request.clientid.parse::<i32>() else {
+        return Json(MqttAuthResponse::deny());
+    };
+    let authenticated = sqlx::query_scalar::<_, i32>(
+        "UPDATE reporters
+         SET last_connection_ip = $1, last_connected_at = NOW()
+         WHERE id = $2 AND token = $3
+         RETURNING id",
+    )
+    .bind(request.ipaddr)
+    .bind(reporter_id)
+    .bind(request.password)
+    .fetch_optional(&**pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some();
 
-    if reporter_id.is_some_and(|id| id.to_string() == request.clientid) {
+    if authenticated {
         Json(MqttAuthResponse::allow())
     } else {
         Json(MqttAuthResponse::deny())
