@@ -8,7 +8,6 @@ pub struct MqttAuthRequest<'r> {
     username: &'r str,
     clientid: &'r str,
     password: &'r str,
-    ipaddr: &'r str,
     protocol: Option<&'r str>,
 }
 
@@ -76,11 +75,10 @@ pub async fn auth(
     };
     let authenticated = sqlx::query_scalar::<_, i32>(
         "UPDATE reporters
-         SET last_connection_ip = $1, last_connected_at = NOW()
-         WHERE id = $2 AND token = $3
+         SET last_connected_at = NOW()
+         WHERE id = $1 AND token = $2
          RETURNING id",
     )
-    .bind(request.ipaddr)
     .bind(reporter_id)
     .bind(request.password)
     .fetch_optional(&**pool)

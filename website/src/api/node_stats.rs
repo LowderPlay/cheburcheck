@@ -15,7 +15,6 @@ struct ProbeMetadata {
     region: Option<String>,
     provider: Option<String>,
     asn: Option<String>,
-    last_connection_ip: Option<String>,
     last_connected_at: Option<DateTime<Utc>>,
 }
 
@@ -54,7 +53,6 @@ struct NodeStatus {
     region: Option<String>,
     provider: Option<String>,
     asn: Option<String>,
-    connection_ip: Option<String>,
     connected_at: Option<DateTime<Utc>>,
     online: bool,
     version: Option<String>,
@@ -69,7 +67,7 @@ pub async fn node_stats(
     mqtt: &State<MqttPublisher>,
 ) -> Result<Json<NodeStatsResponse>, Status> {
     let probes = sqlx::query_as::<_, ProbeMetadata>(
-        "SELECT id, name, region, provider, asn, last_connection_ip, last_connected_at
+        "SELECT id, name, region, provider, asn, last_connected_at
          FROM reporters
          ORDER BY id",
     )
@@ -106,7 +104,6 @@ fn build_node_statuses(
                 region: probe.region,
                 provider: probe.provider,
                 asn: probe.asn,
-                connection_ip: probe.last_connection_ip,
                 connected_at: probe.last_connected_at,
                 online: status.is_some_and(|status| status.online),
                 version: status.map(|status| status.version.clone()),
@@ -139,7 +136,6 @@ mod tests {
                 region: Some("Ural".to_string()),
                 provider: Some("ExampleNet".to_string()),
                 asn: Some("AS64500".to_string()),
-                last_connection_ip: Some("203.0.113.10".to_string()),
                 last_connected_at: Some("2026-08-24T12:34:56Z".parse().unwrap()),
             },
             ProbeMetadata {
@@ -148,7 +144,6 @@ mod tests {
                 region: None,
                 provider: None,
                 asn: None,
-                last_connection_ip: Some("2001:db8::10".to_string()),
                 last_connected_at: Some("2026-08-23T12:34:56Z".parse().unwrap()),
             },
         ];
@@ -173,7 +168,6 @@ mod tests {
                     region: Some("Ural".to_string()),
                     provider: Some("ExampleNet".to_string()),
                     asn: Some("AS64500".to_string()),
-                    connection_ip: Some("203.0.113.10".to_string()),
                     connected_at: Some("2026-08-24T12:34:56Z".parse().unwrap()),
                     online: true,
                     version: Some("1.2.3".to_string()),
@@ -186,7 +180,6 @@ mod tests {
                     region: None,
                     provider: None,
                     asn: None,
-                    connection_ip: Some("2001:db8::10".to_string()),
                     connected_at: Some("2026-08-23T12:34:56Z".parse().unwrap()),
                     online: false,
                     version: None,
