@@ -1,11 +1,16 @@
 <script lang="ts">
 import { ChevronRight, Search } from "@lucide/svelte";
+
+let { token = "" }: { token?: string } = $props();
 </script>
 
 <form
 	class="group relative flex w-full flex-col gap-3 sm:flex-row sm:gap-0"
 	action="/check"
 >
+	{#if token}
+		<input type="hidden" name="token" value={token}>
+	{/if}
 	<!-- svelte-ignore a11y_autofocus -->
 	<!-- biome-ignore-start lint/a11y/noAutofocus: using autofocus is acceptable here -->
 	<input

@@ -1,10 +1,12 @@
 <script lang="ts">
+import { page } from "$app/state";
 import SearchForm from "$lib/components/SearchForm.svelte";
 import StatCard from "$lib/components/StatCard.svelte";
 import { getStatusContext } from "$lib/context/status";
 
 const statusQuery = getStatusContext();
 const status = $derived(statusQuery.data);
+const token = $derived(page.url.searchParams.get("token")?.trim() ?? "");
 </script>
 
 <svelte:head>
@@ -21,7 +23,7 @@ const status = $derived(statusQuery.data);
 	</p>
 </div>
 
-<SearchForm />
+<SearchForm {token} />
 
 <div
 	class="mt-8 grid grid-cols-1 gap-4 text-xs text-neutral-500 sm:grid-cols-3"

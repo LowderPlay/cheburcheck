@@ -95,7 +95,10 @@ pub async fn auth(
 }
 
 #[post("/acl", data = "<request>")]
-pub async fn acl(request: Form<MqttAclRequest<'_>>) -> Json<MqttAuthResponse> {
+pub async fn acl(
+    request: Form<MqttAclRequest<'_>>,
+    pool: &rocket::State<PgPool>,
+) -> Json<MqttAuthResponse> {
     let request = request.into_inner();
     let _ = request.protocol;
 
@@ -108,17 +111,40 @@ pub async fn acl(request: Form<MqttAclRequest<'_>>) -> Json<MqttAuthResponse> {
     }
 
     match request.access {
-        1 if can_probe_subscribe(request.topic) => Json(MqttAuthResponse::allow()),
+        1 if can_probe_subscribe(request.clientid, request.topic, pool).await => {
+            Json(MqttAuthResponse::allow())
+        }
         2 if can_probe_publish(request.clientid, request.topic) => Json(MqttAuthResponse::allow()),
         _ => Json(MqttAuthResponse::deny()),
     }
 }
 
-fn can_probe_subscribe(topic: &str) -> bool {
-    matches!(
-        topic,
-        "probe/config/v1" | "probe/tasks/v1/+" | "probe/tasks/v1/#"
-    )
+async fn can_probe_subscribe(client_id: &str, topic: &str, pool: &PgPool) -> bool {
+    if topic == "probe/config/v1" || is_own_task_subscription(client_id, topic) {
+        return true;
+    }
+    if !is_global_task_subscription(topic) {
+        return false;
+    }
+
+    let Ok(reporter_id) = client_id.parse::<i32>() else {
+        return false;
+    };
+    sqlx::query_scalar::<_, bool>("SELECT NOT hidden FROM reporters WHERE id = $1")
+        .bind(reporter_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+fn is_own_task_subscription(client_id: &str, topic: &str) -> bool {
+    topic == format!("probe/tasks/v1/{client_id}/+")
+}
+
+fn is_global_task_subscription(topic: &str) -> bool {
+    topic == "probe/tasks/v1/+"
 }
 
 fn can_probe_publish(client_id: &str, topic: &str) -> bool {
@@ -140,4 +166,25 @@ fn can_probe_publish(client_id: &str, topic: &str) -> bool {
         (Some("probe"), Some("results"), Some("v1"), Some(_job_id), Some(probe_id), None)
             if probe_id == client_id
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn individual_task_subscriptions_are_node_scoped() {
+        assert!(is_global_task_subscription("probe/tasks/v1/+"));
+        assert!(!is_global_task_subscription("probe/tasks/v1/#"));
+        assert!(is_own_task_subscription("42", "probe/tasks/v1/42/+"));
+        assert!(!is_own_task_subscription("42", "probe/tasks/v1/7/+"));
+        assert!(!is_own_task_subscription("42", "probe/tasks/v1/+/+"));
+        assert!(!is_own_task_subscription("42", "probe/tasks/v1/#"));
+    }
+
+    #[test]
+    fn results_can_only_be_published_as_the_authenticated_node() {
+        assert!(can_probe_publish("42", "probe/results/v1/job/42"));
+        assert!(!can_probe_publish("42", "probe/results/v1/job/7"));
+    }
 }

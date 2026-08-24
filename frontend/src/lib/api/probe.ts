@@ -113,10 +113,14 @@ export type ProbeStatus = {
 
 export function startProbeSSE(
 	id: string,
+	token: string,
 	onResult: (result: ProbeResult) => void,
 	onStatus: (status: Partial<ProbeStatus>) => void,
 ) {
-	const eventSource = new EventSource(`/api/v1/probe/${id}`);
+	const params = new URLSearchParams();
+	if (token) params.set("token", token);
+	const query = params.size > 0 ? `?${params.toString()}` : "";
+	const eventSource = new EventSource(`/api/v1/probe/${id}${query}`);
 
 	eventSource.addEventListener("started", (event) => {
 		const data = JSON.parse(event.data);

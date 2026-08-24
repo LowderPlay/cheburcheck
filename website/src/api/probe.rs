@@ -26,9 +26,10 @@ pub struct ProbeReporterInfo {
     pub asn: Option<String>,
 }
 
-#[get("/probe/<id>")]
+#[get("/probe/<id>?<token>")]
 pub async fn probe_query(
     id: &str,
+    token: Option<&str>,
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
     mqtt: &State<MqttPublisher>,
@@ -67,12 +68,17 @@ pub async fn probe_query(
         return Err(Status::Forbidden);
     }
 
+    let (target_probe, eligible_probes) = load_probe_targets(pool, token).await?;
+    let expected_probes = mqtt.online_probe_ids(&eligible_probes).await;
+    let online_probes = expected_probes.len();
+    let expected_probes = expected_probes.into_iter().collect::<HashSet<_>>();
+
     let mut results = mqtt.subscribe_probe_results(id).await.map_err(|error| {
         warn!("api: failed to subscribe to probe results for {id}: {error}");
         publish_error_status(error)
     })?;
 
-    mqtt.publish_probe_task(id, domain, ip)
+    mqtt.publish_probe_task(id, domain, ip, target_probe.as_deref())
         .await
         .map_err(|error| {
             warn!("api: failed to publish probe task for {id}: {error}");
@@ -80,7 +86,6 @@ pub async fn probe_query(
         })?;
 
     let timeout = mqtt.task_timeout();
-    let online_probes = mqtt.online_probe_count().await;
     let pool = pool.inner().clone();
     let query_id = id;
     let id = id.to_string();
@@ -105,6 +110,9 @@ pub async fn probe_query(
                 result = results.recv() => {
                     match result {
                         Ok(result) => {
+                            if !expected_probes.contains(&result.probe_id) {
+                                continue;
+                            }
                             responded_probes.insert(result.probe_id.clone());
                             let target_traceroute = result.target_traceroute.clone();
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
@@ -143,6 +151,44 @@ pub async fn probe_query(
             }
         }
     })
+}
+
+async fn load_probe_targets(
+    pool: &PgPool,
+    token: Option<&str>,
+) -> Result<(Option<String>, Vec<String>), Status> {
+    if token.is_some_and(str::is_empty) {
+        return Err(Status::BadRequest);
+    }
+    if let Some(token) = token {
+        let probe_id =
+            sqlx::query_scalar::<_, i32>("SELECT id FROM reporters WHERE token = $1 LIMIT 1")
+                .bind(token)
+                .fetch_optional(pool)
+                .await
+                .map_err(|error| {
+                    warn!("api: failed to resolve targeted probe: {error}");
+                    Status::InternalServerError
+                })?
+                .ok_or(Status::NotFound)?
+                .to_string();
+
+        return Ok((Some(probe_id.clone()), vec![probe_id]));
+    }
+
+    let probe_ids =
+        sqlx::query_scalar::<_, i32>("SELECT id FROM reporters WHERE hidden = FALSE ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .map_err(|error| {
+                warn!("api: failed to load global probe recipients: {error}");
+                Status::InternalServerError
+            })?
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect();
+
+    Ok((None, probe_ids))
 }
 
 pub fn build_probe_response(

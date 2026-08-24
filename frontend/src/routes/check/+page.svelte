@@ -23,6 +23,7 @@ type ProbeQueryData = {
 
 const queryClient = useQueryClient();
 const target = $derived(page.url.searchParams.get("target")?.trim() ?? "");
+const token = $derived(page.url.searchParams.get("token")?.trim() ?? "");
 
 const checkQuery = createQuery(() => ({
 	queryKey: ["check", target],
@@ -48,7 +49,7 @@ function createInitialProbeData(id: string): ProbeQueryData {
 }
 
 const probeQuery = createQuery(() => ({
-	queryKey: ["probes", queryId],
+	queryKey: ["probes", queryId, token],
 	queryFn: () => createInitialProbeData(queryId ?? ""),
 	enabled: shouldProbe,
 	staleTime: Infinity,
@@ -59,43 +60,50 @@ $effect(() => {
 	if (!queryId || !shouldProbe) return;
 
 	queryClient.setQueryData<ProbeQueryData>(
-		["probes", queryId],
+		["probes", queryId, token],
 		createInitialProbeData(queryId),
 	);
 
 	const cleanup = startProbeSSE(
 		queryId,
+		token,
 		(result) => {
-			queryClient.setQueryData<ProbeQueryData>(["probes", queryId], (old) => {
-				const current = old ?? createInitialProbeData(queryId);
-				const probes = current.probes.some(
-					(probe) => probe.probe_id === result.probe_id,
-				)
-					? current.probes.map((probe) =>
-							probe.probe_id === result.probe_id ? result : probe,
-						)
-					: [...current.probes, result];
+			queryClient.setQueryData<ProbeQueryData>(
+				["probes", queryId, token],
+				(old) => {
+					const current = old ?? createInitialProbeData(queryId);
+					const probes = current.probes.some(
+						(probe) => probe.probe_id === result.probe_id,
+					)
+						? current.probes.map((probe) =>
+								probe.probe_id === result.probe_id ? result : probe,
+							)
+						: [...current.probes, result];
 
-				return {
-					...current,
-					probes,
-					status: {
-						...current.status,
-						status: "progress",
-						response_count: probes.length,
-					},
-				};
-			});
+					return {
+						...current,
+						probes,
+						status: {
+							...current.status,
+							status: "progress",
+							response_count: probes.length,
+						},
+					};
+				},
+			);
 		},
 		(statusUpdate) => {
-			queryClient.setQueryData<ProbeQueryData>(["probes", queryId], (old) => {
-				const current = old ?? createInitialProbeData(queryId);
+			queryClient.setQueryData<ProbeQueryData>(
+				["probes", queryId, token],
+				(old) => {
+					const current = old ?? createInitialProbeData(queryId);
 
-				return {
-					...current,
-					status: { ...current.status, ...statusUpdate },
-				};
-			});
+					return {
+						...current,
+						status: { ...current.status, ...statusUpdate },
+					};
+				},
+			);
 		},
 	);
 
@@ -115,7 +123,7 @@ const liveVerdict = $derived(
 );
 </script>
 
-<SearchForm />
+<SearchForm {token} />
 
 {#if target.length === 0}
 	<div class="mt-4 border border-neutral-800 p-6 text-sm text-neutral-500">
@@ -130,7 +138,7 @@ const liveVerdict = $derived(
 		<ErrorMessage status={error.status} reason={error.message} />
 	</div>
 {:else if checkQuery.data}
-	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} />
+	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} {token} />
 
 	{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
 		<ProbeTable
