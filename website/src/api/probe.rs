@@ -336,10 +336,16 @@ fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'st
     } else if matched.is_empty() {
         "uncertain"
     } else if is_strict_majority(
-        matched.len(),
         matched
             .iter()
-            .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::ClientHello))
+            .filter(|(h, _)| matches!(h.host_type, HostType::Whitelist))
+            .count(),
+        matched
+            .iter()
+            .filter(|(h, evidence)| {
+                matches!(h.host_type, HostType::Whitelist)
+                    && matches!(evidence, ProbeEvidence::ClientHello)
+            })
             .count(),
     ) {
         "sni_block"
