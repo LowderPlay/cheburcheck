@@ -396,10 +396,16 @@ fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'st
     ) {
         "sni_block"
     } else if is_strict_majority(
-        matched.len(),
         matched
             .iter()
-            .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::Good))
+            .filter(|(h, _)| matches!(h.host_type, HostType::Blacklist))
+            .count(),
+        matched
+            .iter()
+            .filter(|(host, evidence)| {
+                matches!(host.host_type, HostType::Blacklist)
+                    && !matches!(evidence, ProbeEvidence::DataTimeout { .. })
+            })
             .count(),
     ) {
         "whitelist"
