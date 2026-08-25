@@ -197,13 +197,17 @@ impl MqttPublisher {
         Duration::from_millis(self.task_timeout_ms)
     }
 
-    pub async fn online_probe_count(&self) -> usize {
-        self.probe_statuses
-            .read()
-            .await
-            .values()
-            .filter(|status| status.online)
-            .count()
+    pub async fn online_probe_ids(&self, probe_ids: &[String]) -> Vec<String> {
+        let statuses = self.probe_statuses.read().await;
+        probe_ids
+            .iter()
+            .filter(|probe_id| {
+                statuses
+                    .get(probe_id.as_str())
+                    .is_some_and(|status| status.online)
+            })
+            .cloned()
+            .collect()
     }
 
     pub async fn probe_statuses(&self) -> HashMap<String, ProbeStatusSnapshot> {
@@ -253,6 +257,7 @@ impl MqttPublisher {
         query_id: Uuid,
         domain: Option<&str>,
         ip: IpAddr,
+        probe_id: Option<&str>,
     ) -> Result<(), PublishError> {
         let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
         let query_id = query_id.to_string();
@@ -265,7 +270,10 @@ impl MqttPublisher {
             timeout_ms: self.task_timeout_ms,
         };
         let payload = serde_json::to_vec(&task).map_err(PublishError::Serialize)?;
-        let topic = format!("probe/tasks/v1/{query_id}");
+        let topic = match probe_id {
+            Some(probe_id) => format!("probe/tasks/v1/{probe_id}/{query_id}"),
+            None => format!("probe/tasks/v1/{query_id}"),
+        };
 
         client
             .publish(topic, QoS::AtLeastOnce, false, payload)

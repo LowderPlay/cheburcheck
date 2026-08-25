@@ -27,10 +27,18 @@ type ResultVerdict = ResolvedProbeVerdict | "blocked";
 let {
 	result,
 	probeVerdict = null,
+	token = "",
 }: {
 	result: CheckResult;
 	probeVerdict?: ResolvedProbeVerdict | null;
+	token?: string;
 } = $props();
+
+function checkHref(target: string): string {
+	const params = new URLSearchParams({ target });
+	if (token) params.set("token", token);
+	return `/check?${params.toString()}`;
+}
 
 const valueClass = "text-right text-sm font-medium text-neutral-200";
 const alertValueClass = `${valueClass} text-red-500`;
@@ -114,7 +122,7 @@ const providerCidrs = (provider: Provider) =>
 							{#each result.reverseLookup as ptr}
 								<span class={valueClass}>
 									<a
-										href={`/check?target=${ptr}`}
+										href={checkHref(ptr)}
 										class="text-neutral-100 underline decoration-neutral-500 transition-all hover:text-white hover:decoration-neutral-100"
 									>
 										{ptr}
@@ -135,7 +143,7 @@ const providerCidrs = (provider: Provider) =>
 					<span class={valueClass}>
 						{#if result.geo.asn}
 							<a
-								href={`/check?target=${result.geo.asn}`}
+								href={checkHref(result.geo.asn)}
 								class="text-neutral-100 underline decoration-neutral-500 transition-all hover:text-white hover:decoration-neutral-100"
 							>
 								{result.geo.asn}

@@ -101,6 +101,12 @@ async fn main() -> Result<()> {
     client
         .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
         .await?;
+    client
+        .subscribe(
+            format!("probe/tasks/v1/{}/+", args.probe_id),
+            QoS::AtLeastOnce,
+        )
+        .await?;
 
     info!(
         "probe {} connected over WebSocket to {}",
@@ -175,6 +181,12 @@ async fn main() -> Result<()> {
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
                 client
                     .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
+                    .await?;
+                client
+                    .subscribe(
+                        format!("probe/tasks/v1/{}/+", args.probe_id),
+                        QoS::AtLeastOnce,
+                    )
                     .await?;
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
@@ -349,10 +361,7 @@ async fn handle_task(
     task: ProbeTask<'_>,
     received_at: Instant,
 ) -> Result<()> {
-    let job_id = topic
-        .strip_prefix("probe/tasks/v1/")
-        .filter(|id| !id.is_empty())
-        .unwrap_or(&task.id);
+    let job_id = probe_task_job_id(topic).unwrap_or(&task.id);
     let timeout = Duration::from_millis(task.timeout_ms);
     let Some(remaining) = timeout.checked_sub(received_at.elapsed()) else {
         warn!(
@@ -427,9 +436,26 @@ async fn handle_task(
         .context("publish probe result")
 }
 
+fn probe_task_job_id(topic: &str) -> Option<&str> {
+    let parts = topic.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["probe", "tasks", "v1", job_id] if !job_id.is_empty() => Some(job_id),
+        ["probe", "tasks", "v1", _recipient, job_id] if !job_id.is_empty() => Some(job_id),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_job_id_from_legacy_global_and_individual_topics() {
+        assert_eq!(probe_task_job_id("probe/tasks/v1/job-1"), Some("job-1"));
+        assert_eq!(probe_task_job_id("probe/tasks/v1/42/job-2"), Some("job-2"));
+        assert_eq!(probe_task_job_id("probe/tasks/v1"), None);
+        assert_eq!(probe_task_job_id("probe/tasks/v1/42/job-2/extra"), None);
+    }
 
     #[test]
     fn decodes_separate_dpi_targets() {
