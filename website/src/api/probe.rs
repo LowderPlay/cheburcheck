@@ -56,6 +56,7 @@ pub async fn probe_query(
             return Err(Status::BadRequest);
         }
     };
+    let is_ip_target = domain.is_none();
     let probe_config = mqtt.probe_config();
     if domain.is_none() && !probe_config.traceroute_enabled {
         return Err(Status::BadRequest);
@@ -125,7 +126,12 @@ pub async fn probe_query(
                                     None
                                 }
                             };
-                            let response = build_probe_response(result, &probe_config, reporter_info);
+                            let response = build_probe_response(
+                                result,
+                                &probe_config,
+                                reporter_info,
+                                is_ip_target,
+                            );
                             if let Err(error) = insert_probe_report(
                                 query_id,
                                 &response,
@@ -195,6 +201,7 @@ pub fn build_probe_response(
     raw: ProbeResultEvent,
     config: &ProbeConfig,
     reporter_info: Option<ProbeReporterInfo>,
+    is_ip_target: bool,
 ) -> Value {
     let hosts: HashMap<&String, &Host> = config.hosts.iter().map(|h| (&h.id, h)).collect();
     let verdicts = build_probe_verdicts(
@@ -203,6 +210,7 @@ pub fn build_probe_response(
         raw.target_traceroute.as_ref(),
         raw.dpi_hop,
         raw.dns.as_ref(),
+        is_ip_target,
     );
     let target_hop =
         raw.target_traceroute
@@ -338,6 +346,7 @@ fn build_probe_verdicts(
     target_traceroute: Option<&TcpTracerouteResult>,
     dpi_hop: Option<u8>,
     dns: Option<&reports::probe::DnsProbeResult>,
+    is_ip_target: bool,
 ) -> Vec<&'static str> {
     if results.is_empty() && target_traceroute.is_none() && dns.is_none() {
         return vec!["uncertain"];
@@ -346,6 +355,17 @@ fn build_probe_verdicts(
     let tspu_block = dpi_hop.is_some()
         && target_traceroute
             .is_some_and(|traceroute| matches!(&traceroute.result, TcpTracerouteOutcome::Timeout));
+
+    // IP tasks do not run the SNI/CDN host checks. A reachable IP therefore does not prove that
+    // a statically listed CDN address is unblocked.
+    if is_ip_target {
+        return if tspu_block {
+            vec!["tspu_block"]
+        } else {
+            vec!["uncertain"]
+        };
+    }
+
     let host_verdict = build_host_verdict(results, config);
     let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
 
@@ -479,29 +499,29 @@ mod tests {
     #[test]
     fn no_checks_returns_uncertain() {
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), None, None, None),
+            build_probe_verdicts(&[], &empty_config(), None, None, None, false),
             vec!["uncertain"]
         );
     }
 
     #[test]
-    fn tspu_block_requires_a_dpi_hop_and_post_dpi_timeout() {
+    fn ip_target_only_reports_tspu_block_with_dpi_hop_and_timeout() {
         let timeout = TcpTracerouteResult {
             target: "192.0.2.1".parse().unwrap(),
             result: TcpTracerouteOutcome::Timeout,
         };
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&timeout), Some(4), None),
+            build_probe_verdicts(&[], &empty_config(), Some(&timeout), Some(4), None, true),
             vec!["tspu_block"]
         );
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&timeout), None, None),
-            vec!["ok"]
+            build_probe_verdicts(&[], &empty_config(), Some(&timeout), None, None, true),
+            vec!["uncertain"]
         );
     }
 
     #[test]
-    fn any_post_dpi_response_clears_tspu_block() {
+    fn reachable_ip_target_is_uncertain() {
         for result in [
             TcpTracerouteOutcome::IcmpTimeExceeded { hop: 5 },
             TcpTracerouteOutcome::Connected { hop: 5 },
@@ -512,8 +532,8 @@ mod tests {
                 result,
             };
             assert_eq!(
-                build_probe_verdicts(&[], &empty_config(), Some(&target), Some(4), None),
-                vec!["ok"]
+                build_probe_verdicts(&[], &empty_config(), Some(&target), Some(4), None, true),
+                vec!["uncertain"]
             );
         }
     }
@@ -542,7 +562,7 @@ mod tests {
         };
 
         assert_eq!(
-            build_probe_verdicts(&results, &config, None, None, Some(&dns)),
+            build_probe_verdicts(&results, &config, None, None, Some(&dns), false),
             vec!["sni_block", "dns_spoofing"]
         );
     }
