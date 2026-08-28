@@ -10,6 +10,10 @@ use sqlx::postgres::PgPool;
 
 pub struct Agency {
     pub id: i32,
+    #[expect(
+        dead_code,
+        reason = "поле входит в SQLx offline-запрос; его удаление требует обновления метаданных на эталонной PostgreSQL"
+    )]
     pub name: String,
 }
 

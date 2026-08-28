@@ -323,7 +323,7 @@ struct ParsedProbeConfig {
 }
 
 fn parse_probe_hosts(contents: &str) -> Result<ParsedProbeConfig, PublishError> {
-    let config: ProbeHostsFile = toml::from_str(&contents).map_err(PublishError::ConfigParse)?;
+    let config: ProbeHostsFile = toml::from_str(contents).map_err(PublishError::ConfigParse)?;
 
     let hosts = config
         .hosts

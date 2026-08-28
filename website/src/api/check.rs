@@ -58,7 +58,7 @@ pub async fn check(
         .map_err(|_| Status::InternalServerError)?;
 
     let id: Option<String> = if let Ok(check) = &check {
-        match save_query(&mut *db, &target, check, addr, checker.read().await).await {
+        match save_query(&mut db, &target, check, addr, checker.read().await).await {
             Ok(id) => Some(id.to_string()),
             Err(e) => {
                 warn!("api: failed to save check: {:?}", e);
@@ -70,7 +70,7 @@ pub async fn check(
     };
 
     let whitelist: Option<WhitelistedEntry> = if let Target::Domain(domain) = &target {
-        check_whitelist(domain, &mut *db)
+        check_whitelist(domain, &mut db)
             .await
             .map_err(|_| Status::InternalServerError)?
     } else {
