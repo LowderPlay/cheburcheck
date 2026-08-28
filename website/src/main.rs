@@ -7,6 +7,7 @@ mod db;
 mod mqtt;
 mod mqtt_auth;
 mod probe_installer;
+mod probe_updates;
 mod whitelist;
 
 use env_logger::Env;
@@ -63,9 +64,19 @@ async fn rocket() -> _ {
         .unwrap_or("5".to_string())
         .parse()
         .unwrap_or(5);
+    let probe_update_download_rate_limit_rpm: u32 =
+        std::env::var("PROBE_UPDATE_DOWNLOAD_RATE_LIMIT_RPM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2);
     let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
     let probe_limiter = std::sync::Arc::new(api::build_probe_rate_limiter(probe_rate_limit_rpm));
+    let probe_update_download_limiter = std::sync::Arc::new(
+        api::build_probe_update_download_rate_limiter(probe_update_download_rate_limit_rpm),
+    );
     let mqtt_publisher = mqtt::MqttPublisher::start_from_env();
+    let probe_update_proxy = probe_updates::ProbeUpdateProxy::from_env()
+        .expect("failed to configure probe update proxy");
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(
@@ -91,7 +102,9 @@ async fn rocket() -> _ {
         .manage(pool)
         .manage(api_limiter)
         .manage(probe_limiter)
+        .manage(probe_update_download_limiter)
         .manage(mqtt_publisher)
+        .manage(probe_update_proxy)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount(
             "/api/v1",
@@ -107,6 +120,10 @@ async fn rocket() -> _ {
         )
         .mount("/agency", routes![agency::upload_report])
         .mount("/mqtt", routes![mqtt_auth::auth, mqtt_auth::acl])
+        .mount(
+            "/api/v1/probe-updates",
+            routes![probe_updates::latest_release, probe_updates::download_asset],
+        )
         .mount("/", routes![probe_installer::download])
         .mount("/whitelist", routes![whitelist::export_csv])
         .register("/", catchers![api_error])

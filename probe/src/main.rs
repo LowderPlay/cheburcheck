@@ -100,7 +100,7 @@ impl Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
-    /// Update Cheburprobe from the latest GitHub release.
+    /// Update Cheburprobe from the trusted update server.
     Update,
 }
 

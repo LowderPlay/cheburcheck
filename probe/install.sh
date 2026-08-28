@@ -1,9 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY=${CHEBURPROBE_REPOSITORY:-LowderPlay/cheburcheck}
-GITHUB_URL=${CHEBURPROBE_GITHUB_URL:-https://github.com}
-GITHUB_API_URL=${CHEBURPROBE_GITHUB_API_URL:-https://api.github.com}
+UPDATE_API_URL=${CHEBURPROBE_UPDATE_API_BASE_URL:-https://cheburcheck.ru/api/v1/probe-updates}
 WITH_LUCI=${CHEBURPROBE_WITH_LUCI:-1}
 ASSUME_YES=${CHEBURPROBE_ASSUME_YES:-0}
 PROBE_ID=${PROBE_ID:-}
@@ -61,7 +59,7 @@ probe_version() {
 				;;
 		esac
 	fi
-	[ -n "$version" ] || fail "the latest GitHub release has no Cheburprobe package for $PLATFORM_NAME/$ARCH"
+	[ -n "$version" ] || fail "the latest release has no Cheburprobe package for $PLATFORM_NAME/$ARCH"
 	case "$version" in ''|*[!0-9A-Za-z.+~-]*) fail "invalid Probe package version: $version" ;; esac
 	printf '%s\n' "$version"
 }
@@ -210,7 +208,7 @@ read_credentials() {
 }
 
 asset_url() {
-	printf '%s/%s/releases/latest/download/%s\n' "$GITHUB_URL" "$REPOSITORY" "$1"
+	printf '%s/assets/%s\n' "${UPDATE_API_URL%/}" "$1"
 }
 
 download_asset() {
@@ -302,7 +300,7 @@ print_configuration_help() {
 WORK_DIR=$(mktemp -d /tmp/cheburprobe-install.XXXXXX)
 trap 'rm -rf "$WORK_DIR"' EXIT INT TERM
 RELEASE_JSON=$WORK_DIR/latest.json
-download "$GITHUB_API_URL/repos/$REPOSITORY/releases/latest" "$RELEASE_JSON"
+download "${UPDATE_API_URL%/}/releases/latest" "$RELEASE_JSON"
 detect_platform
 VERSION=$(probe_version)
 select_packages
