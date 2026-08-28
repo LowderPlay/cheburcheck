@@ -78,6 +78,7 @@ struct Args {
     probe_token: String,
     max_concurrent_tasks: usize,
     traceroute_retries: u8,
+    bundle_type: &'static str,
 }
 
 impl Cli {
@@ -94,6 +95,7 @@ impl Cli {
                 .context("--probe-token or PROBE_TOKEN is required when running the probe")?,
             max_concurrent_tasks: self.max_concurrent_tasks,
             traceroute_retries: self.traceroute_retries,
+            bundle_type: update::bundle_type().context("failed to detect probe bundle type")?,
         })
     }
 }
@@ -127,6 +129,7 @@ async fn main() -> Result<()> {
         online: false,
         probe_id: &args.probe_id,
         version: env!("CARGO_PKG_VERSION"),
+        bundle_type: Some(args.bundle_type),
         dpi_hop_v4: None,
         dpi_hop_v6: None,
     })?;
@@ -456,6 +459,7 @@ async fn publish_status(
         online,
         probe_id: &args.probe_id,
         version: env!("CARGO_PKG_VERSION"),
+        bundle_type: Some(args.bundle_type),
         dpi_hop_v4: dpi_hops.v4,
         dpi_hop_v6: dpi_hops.v6,
     })?;
@@ -625,6 +629,7 @@ mod tests {
             online: true,
             probe_id: "probe-1",
             version: "1.0.0",
+            bundle_type: Some("debian"),
             dpi_hop_v4: Some(4),
             dpi_hop_v6: Some(6),
         };
@@ -632,6 +637,7 @@ mod tests {
 
         assert_eq!(value["dpi_hop_v4"], 4);
         assert_eq!(value["dpi_hop_v6"], 6);
+        assert_eq!(value["bundle_type"], "debian");
     }
 
     #[test]

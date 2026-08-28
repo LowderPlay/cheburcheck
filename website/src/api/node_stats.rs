@@ -56,6 +56,7 @@ struct NodeStatus {
     connected_at: Option<DateTime<Utc>>,
     online: bool,
     version: Option<String>,
+    bundle_type: Option<String>,
     dpi_hop_v4: Option<u8>,
     dpi_hop_v6: Option<u8>,
 }
@@ -107,6 +108,7 @@ fn build_node_statuses(
                 connected_at: probe.last_connected_at,
                 online: status.is_some_and(|status| status.online),
                 version: status.map(|status| status.version.clone()),
+                bundle_type: status.and_then(|status| status.bundle_type.clone()),
                 dpi_hop_v4: status.and_then(|status| status.dpi_hop_v4),
                 dpi_hop_v6: status.and_then(|status| status.dpi_hop_v6),
             }
@@ -152,6 +154,7 @@ mod tests {
             ProbeStatusSnapshot {
                 online: true,
                 version: "1.2.3".to_string(),
+                bundle_type: Some("debian".to_string()),
                 dpi_hop_v4: Some(5),
                 dpi_hop_v6: None,
             },
@@ -171,6 +174,7 @@ mod tests {
                     connected_at: Some("2026-08-24T12:34:56Z".parse().unwrap()),
                     online: true,
                     version: Some("1.2.3".to_string()),
+                    bundle_type: Some("debian".to_string()),
                     dpi_hop_v4: Some(5),
                     dpi_hop_v6: None,
                 },
@@ -183,6 +187,7 @@ mod tests {
                     connected_at: Some("2026-08-23T12:34:56Z".parse().unwrap()),
                     online: false,
                     version: None,
+                    bundle_type: None,
                     dpi_hop_v4: None,
                     dpi_hop_v6: None,
                 },

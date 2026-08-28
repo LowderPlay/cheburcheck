@@ -7,6 +7,8 @@ pub struct ProbeStatus<'a> {
     pub probe_id: &'a str,
     pub version: &'a str,
     #[serde(default)]
+    pub bundle_type: Option<&'a str>,
+    #[serde(default)]
     pub dpi_hop_v4: Option<u8>,
     #[serde(default)]
     pub dpi_hop_v6: Option<u8>,

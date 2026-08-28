@@ -33,6 +33,22 @@ enum PackageKind {
     Windows,
 }
 
+impl PackageKind {
+    const fn bundle_type(self) -> &'static str {
+        match self {
+            Self::Debian => "debian",
+            Self::Apk => "openwrt-apk",
+            Self::Opkg => "openwrt-opkg",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+        }
+    }
+}
+
+pub fn bundle_type() -> Result<&'static str> {
+    detect_platform().map(|(kind, _, _)| kind.bundle_type())
+}
+
 #[cfg(unix)]
 struct UpdateLock {
     _file: File,
@@ -192,13 +208,15 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
         && command_succeeds("apk", &["info", "--exists", "cheburprobe"])?
     {
         let architecture = output_text("apk", &["--print-arch"])?;
+        let architecture = architecture.trim();
+        let architecture = if architecture == "aarch64" {
+            openwrt_apk_arch()?
+        } else {
+            architecture.to_owned()
+        };
         let luci_installed =
             command_succeeds("apk", &["info", "--exists", "luci-app-cheburprobe"])?;
-        Ok((
-            PackageKind::Apk,
-            architecture.trim().to_owned(),
-            luci_installed,
-        ))
+        Ok((PackageKind::Apk, architecture, luci_installed))
     } else if command_exists("opkg")
         && output_text("opkg", &["list-installed", "cheburprobe"])?
             .lines()
@@ -225,6 +243,28 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
 
     #[cfg(not(any(target_os = "linux", windows)))]
     bail!("updates are not supported on this operating system")
+}
+
+#[cfg(target_os = "linux")]
+fn openwrt_apk_arch() -> Result<String> {
+    if let Ok(architecture) = std::fs::read_to_string("/etc/apk/arch") {
+        let architecture = architecture.trim();
+        if !architecture.is_empty() {
+            return Ok(architecture.to_owned());
+        }
+    }
+    let release = std::fs::read_to_string("/etc/openwrt_release")
+        .context("failed to read /etc/openwrt_release")?;
+    parse_openwrt_release_arch(&release).context("OpenWrt did not report DISTRIB_ARCH")
+}
+
+#[cfg(target_os = "linux")]
+fn parse_openwrt_release_arch(release: &str) -> Option<String> {
+    release.lines().find_map(|line| {
+        line.strip_prefix("DISTRIB_ARCH=")
+            .map(|value| value.trim_matches(['\'', '"']).to_owned())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn select_luci_asset<'a>(
@@ -460,6 +500,15 @@ mod tests {
                 "aarch64_generic"
             ),
             Some(Version::new(1, 2, 3))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_full_openwrt_architecture() {
+        assert_eq!(
+            parse_openwrt_release_arch("DISTRIB_ID='OpenWrt'\nDISTRIB_ARCH='aarch64_cortex-a53'\n"),
+            Some("aarch64_cortex-a53".to_owned())
         );
     }
 
