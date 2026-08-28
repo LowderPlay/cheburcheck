@@ -544,7 +544,7 @@ mod tests {
         config.hosts.push(Host {
             id: "test".to_string(),
             host: "192.0.2.1".to_string(),
-            host_type: HostType::Blacklist,
+            host_type: HostType::Whitelist,
             file_path: String::new(),
             timeout_sec: 1,
             min_data: 1,
@@ -564,6 +564,28 @@ mod tests {
         assert_eq!(
             build_probe_verdicts(&results, &config, None, None, Some(&dns), false),
             vec!["sni_block", "dns_spoofing"]
+        );
+    }
+
+    #[test]
+    fn reports_whitelist_when_blacklist_host_returns_data() {
+        let mut config = empty_config();
+        config.hosts.push(Host {
+            id: "test".to_string(),
+            host: "192.0.2.1".to_string(),
+            host_type: HostType::Blacklist,
+            file_path: String::new(),
+            timeout_sec: 1,
+            min_data: 1,
+        });
+        let results = vec![HostProbeResult {
+            host_id: "test".to_string(),
+            probe_evidence: ProbeEvidence::ClientHello,
+        }];
+
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false),
+            vec!["whitelist"]
         );
     }
 
