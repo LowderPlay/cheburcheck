@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for Cheburprobe updates when requested over MQTT
+
+[Path]
+PathExists=/run/cheburprobe/update-requested
+Unit=cheburprobe-update.service
+
+[Install]
+WantedBy=multi-user.target

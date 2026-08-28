@@ -1,140 +1,260 @@
 # Cheburcheck Probe
+
 [![Build Probe](https://github.com/LowderPlay/cheburcheck/actions/workflows/probe-build.yml/badge.svg)](https://github.com/LowderPlay/cheburcheck/actions/workflows/probe-build.yml)
 
-Динамический сканер для Cheburcheck.
-Подключается к MQTT-брокеру Cheburcheck по WebSocket, получает задания на проверку доменов, выполняет сетевые пробы со своей точки подключения и отправляет результаты обратно на сайт.
+Cheburcheck Probe (`cheburprobe`) — динамический сетевой сканер. Он подключается к Cheburcheck, получает задания на проверку доменов, выполняет их из вашей сети и отправляет технические результаты обратно.
 
-Сканер нужен для проверки «изнутри» разных сетей: например, от разных операторов, регионов или хостингов.
-Он не принимает итоговое решение сам, а передает технические признаки, по которым Cheburcheck показывает результат пользователю.
+Сканер помогает проверять доступность из разных сетей, регионов и хостингов. Он не принимает итоговое решение сам: Cheburcheck использует собранные им признаки при формировании результата.
 
-## Сборка
+## Быстрый старт
 
-Готовые бинарные файлы, Debian-пакеты и OpenWrt пакеты для arm64 можно скачать на [странице релизов](https://github.com/LowderPlay/cheburcheck/releases).
+### 1. Получите ID и токен
 
-На Debian-based дистрибутивах можно собрать пакет через `cargo-deb`:
+Для запуска нужны `PROBE_ID` и `PROBE_TOKEN`. Запросите их по адресу [support@cheburcheck.ru](mailto:support@cheburcheck.ru) и укажите в письме:
+
+- регион;
+- интернет-провайдера или хостинг;
+- ASN, если он известен;
+- устройство, на котором будет работать сканер: сервер, домашний роутер, микрокомпьютер и т. п.
+
+Не публикуйте полученный токен и не добавляйте его в систему контроля версий.
+
+### 2. Выберите способ установки
+
+Готовые пакеты и бинарные файлы находятся на [странице релизов](https://github.com/LowderPlay/cheburcheck/releases), Docker-образ — в GitHub Container Registry: `ghcr.io/lowderplay/cheburcheck-probe`.
+
+| Среда | Что использовать |
+| --- | --- |
+| Debian, Ubuntu и производные | `.deb` для amd64 или arm64 |
+| Docker на Linux | образ для amd64 или arm64 |
+| OpenWrt с `apk` (25.12+) | основной `.apk` и пакет LuCI `.apk` |
+| OpenWrt с `opkg` | основной `.ipk` и пакет LuCI `.ipk` |
+| Windows | экспериментальная standalone-сборка для x86-64 |
+
+> [!WARNING]
+> Поддержка Windows нестабильна. DPI-трассировка использует raw ICMP-сокеты, доставка
+> ответов в которые зависит от Windows Firewall и сетевого драйвера. В частности,
+> IPv6-прыжки могут отображаться как таймауты, даже если пакеты ICMPv6 Time Exceeded
+> видны в анализаторе трафика. Для постоянной работы рекомендуется Linux.
+
+### 3. Автоматическая установка Debian/OpenWrt
+
+Интерактивный мастер определяет ОС, архитектуру и пакетный менеджер, находит версию Probe среди пакетов последнего GitHub Release, показывает текущую и доступную версии, а затем запрашивает подтверждение установки или обновления. Данные авторизации можно указать сразу или настроить позднее.
+
+На Debian/Ubuntu выполните:
 
 ```shell
-cargo deb --package probe -- --bin cheburprobe
+curl -fsSL https://cheburcheck.ru/install-probe.sh | sudo sh
 ```
 
-На прочих дистрибутивах и ОС можно запустить напрямую:
+На OpenWrt выполните от имени `root`:
 
 ```shell
-cargo run --package probe --bin cheburprobe -- \
-  --probe-id <ID_СКАНЕРА> \
-  --probe-token <ТОКЕН_СКАНЕРА>
+wget -qO- https://cheburcheck.ru/install-probe.sh | sh
 ```
 
-Также доступен Docker-образ, который собирается из `probe/Dockerfile`.
+Перед запуском можно скачать и просмотреть скрипт отдельно:
 
-Для OpenWrt на arm64 установите основной `.apk` и пакет LuCI. Пакеты из GitHub
-Actions не подписаны, поэтому для локальной установки нужен флаг `--allow-untrusted`:
+```shell
+curl -fSLO https://cheburcheck.ru/install-probe.sh
+less install.sh
+sudo sh install.sh
+```
 
-Узнать архитектуру на OpenWrt с `apk`:
+Если Cheburprobe уже установлен, мастер покажет установленную и последнюю версии и спросит разрешение на обновление. Существующие настройки авторизации можно сохранить.
+
+Для автоматизированной установки передайте `PROBE_ID`, `PROBE_TOKEN` и `CHEBURPROBE_ASSUME_YES=1`.
+
+По умолчанию в OpenWrt также устанавливается интерфейс LuCI. Чтобы установить только сервис, передайте `CHEBURPROBE_WITH_LUCI=0`. Для установки конкретного релиза можно передать `CHEBURPROBE_VERSION`, например `CHEBURPROBE_VERSION=0.5.0`.
+
+## Debian и Ubuntu
+
+1. На [странице релизов](https://github.com/LowderPlay/cheburcheck/releases) скачайте файл `cheburprobe_*.deb` для архитектуры вашей системы. Проверить архитектуру можно командой `dpkg --print-architecture`.
+
+2. Установите пакет:
+
+   ```shell
+   sudo apt install ./cheburprobe_*.deb
+   ```
+
+3. Откройте файл настроек:
+
+   ```shell
+   sudo nano /etc/default/cheburprobe
+   ```
+
+   Укажите выданные ID и токен. Адрес брокера обычно менять не требуется:
+
+   ```shell
+   PROBE_ID=1
+   PROBE_TOKEN=ваш-токен
+   MQTT_HOST=wss://cheburcheck.ru/mqtt
+   MQTT_PORT=443
+   ```
+
+4. Запустите сервис и добавьте его в автозагрузку:
+
+   ```shell
+   sudo systemctl enable --now cheburprobe.service
+   ```
+
+5. Убедитесь, что сканер работает:
+
+   ```shell
+   systemctl status cheburprobe.service
+   journalctl -u cheburprobe.service -f
+   ```
+
+Пакет устанавливает systemd-сервис `cheburprobe.service`. Сервис работает без root-доступа и получает только capability `CAP_NET_RAW`, необходимую для traceroute.
+
+## Docker
+
+Образ `ghcr.io/lowderplay/cheburcheck-probe:latest` доступен для Linux amd64 и arm64. Скачайте его и запустите контейнер:
+
+```shell
+docker pull ghcr.io/lowderplay/cheburcheck-probe:latest
+
+docker run -d \
+  --name cheburprobe \
+  --restart unless-stopped \
+  --cap-add NET_RAW \
+  -e PROBE_ID=1 \
+  -e PROBE_TOKEN=ваш-токен \
+  ghcr.io/lowderplay/cheburcheck-probe:latest
+```
+
+Проверьте состояние и логи:
+
+```shell
+docker ps --filter name=cheburprobe
+docker logs -f cheburprobe
+```
+
+Для постоянной установки удобнее хранить параметры в отдельном файле, например `cheburprobe.env`, ограничить доступ к нему и передать Docker через `--env-file cheburprobe.env`; либо использовать Docker Compose.
+
+## OpenWrt
+
+Готовые пакеты выпускаются для `aarch64_generic`, `aarch64_cortex-a53` и `aarch64_cortex-a72`. Со [страницы релиза](https://github.com/LowderPlay/cheburcheck/releases) нужно скачать два файла: основной пакет `cheburprobe` для архитектуры роутера и универсальный пакет интерфейса `luci-app-cheburprobe`.
+
+Сначала определите, какой пакетный менеджер используется:
+
+```shell
+command -v apk || command -v opkg
+```
+
+### OpenWrt с `apk`
+
+Узнайте архитектуру:
 
 ```shell
 apk --print-arch
 ```
 
-Например, для результата `aarch64_cortex-a53` нужен файл с
-`_aarch64_cortex-a53.apk` в имени:
+Например, для `aarch64_cortex-a53` выберите основной файл с `_aarch64_cortex-a53.apk` в имени. Пакеты релиза не подписаны ключом вашего OpenWrt, поэтому при локальной установке требуется `--allow-untrusted`:
 
 ```shell
 apk --allow-untrusted add \
-  ./cheburprobe-*_"$(apk --print-arch)".apk \
+  ./cheburprobe-*_<АРХИТЕКТУРА>.apk \
   ./luci-app-cheburprobe-*.apk
 ```
 
-После установки откройте **Службы → Cheburprobe** в LuCI, заполните ID и токен,
-включите сервис и нажмите **Сохранить и применить**. Те же настройки доступны
-через UCI в `/etc/config/cheburprobe`. Конфигурационный файл устанавливается с
-правами `0600`, поскольку токен хранится в нем в открытом виде.
+### OpenWrt с `opkg`
 
-На OpenWrt с пакетным менеджером `opkg` установите совместимые `.ipk` пакеты:
+Посмотрите список поддерживаемых архитектур:
 
 ```shell
 opkg print-architecture
 ```
 
-Команда может вывести несколько строк. Выберите специфичную для процессора
-архитектуру, например `aarch64_cortex-a53`, а не универсальную `all`.
+Выберите архитектуру процессора, например `aarch64_cortex-a53`, а не универсальную `all`, и установите оба пакета:
 
 ```shell
 opkg install \
-  ./cheburprobe_*_<АРХИТЕКТУРА_УСТРОЙСТВА>.ipk \
+  ./cheburprobe_*_<АРХИТЕКТУРА>.ipk \
   ./luci-app-cheburprobe_*_all.ipk
 ```
 
-GitHub Actions выпускает пакеты для `aarch64_generic`, `aarch64_cortex-a53` и
-`aarch64_cortex-a72`. Для другого имени архитектуры OpenWrt пакет можно собрать
-с переменной `OPENWRT_ARCH`, например
-`OPENWRT_ARCH=aarch64_cortex-a53 probe/openwrt/build-apk.sh <binary> <output-dir>`.
-Та же переменная поддерживается скриптом `build-ipk.sh`.
+### Настройка OpenWrt
 
-## Получение доступа
+После установки откройте **Службы → Cheburprobe** в LuCI:
 
-Для подключения сканера нужен `PROBE_ID` и `PROBE_TOKEN`.
-Они должны соответствовать записи в таблице `reporters` на стороне Cheburcheck.
+1. укажите **Probe ID** и **Probe token**;
+2. включите **Enable service**;
+3. нажмите **Сохранить и применить**.
 
-Чтобы получить доступ, напишите на [support@cheburcheck.ru](mailto:support@cheburcheck.ru).
-В письме укажите:
+Настройки также доступны через UCI в `/etc/config/cheburprobe`. Файл создаётся с правами `0600`, потому что токен хранится в открытом виде. Для проверки используйте:
 
-- регион;
-- интернет-провайдера или хостинг;
-- ASN, если он известен;
-- где будет запущен сканер: сервер, домашний роутер, микрокомпьютер и так далее.
+```shell
+/etc/init.d/cheburprobe status
+logread -e cheburprobe
+```
 
-## Установка как systemd-демона
+## Общие настройки
 
-Самый простой способ установки на Debian-based систему — скачать `.deb` пакет `cheburprobe` со [страницы релизов](https://github.com/LowderPlay/cheburcheck/releases).
+Параметры можно передавать через переменные окружения или аргументы командной строки. В Debian переменные задаются в `/etc/default/cheburprobe`, в Docker — через `-e` или `--env-file`. OpenWrt настраивается через LuCI/UCI.
 
-Debian-пакет устанавливает systemd unit `cheburprobe.service` и файл конфигурации `/etc/default/cheburprobe`.
-Сервис не включается автоматически: сначала нужно указать данные сканера.
+| Аргумент / переменная | Назначение | По умолчанию |
+| --- | --- | --- |
+| `--probe-id`, `PROBE_ID` | ID сканера | обязательный параметр |
+| `--probe-token`, `PROBE_TOKEN` | Секретный токен | обязательный параметр |
+| `--mqtt-host`, `MQTT_HOST` | URL MQTT-брокера; `ws://` или `wss://` | `wss://cheburcheck.ru/mqtt` |
+| `--mqtt-port`, `MQTT_PORT` | Порт MQTT-брокера | `443` |
+| `--mqtt-connection-timeout-secs`, `MQTT_CONNECTION_TIMEOUT_SECS` | Таймаут подключения, секунды | `30` |
+| `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимум одновременных заданий | `8` |
+| `--traceroute-retries`, `TRACEROUTE_RETRIES` | Число одновременных TCP-попыток на каждом TTL | `3` |
+| `RUST_LOG` | Уровень логирования | `info` |
 
-1. Установите пакет:
+`MAX_CONCURRENT_TASKS` и `TRACEROUTE_RETRIES` должны быть больше нуля.
 
-    ```shell
-    sudo apt install ./cheburprobe_*.deb
-    ```
+## Автоматические обновления
 
-2. Настройте `/etc/default/cheburprobe`:
+Пакеты Debian и OpenWrt каждые шесть часов проверяют последний опубликованный GitHub Release. При появлении новой версии пакет обновляется, а сервис перезапускается. В OpenWrt пакет LuCI обновляется вместе с основным.
 
-    ```shell
-    sudo nano /etc/default/cheburprobe
-    ```
+Автообновления включены по умолчанию. Отключить их в Debian можно командой:
 
-    Минимальная конфигурация:
+```shell
+sudo systemctl disable --now cheburprobe-update.timer
+```
 
-    ```shell
-    PROBE_ID=1
-    PROBE_TOKEN=ваш-токен
-    MQTT_HOST=wss://cheburcheck.ru/mqtt
-    MQTT_PORT=443
-    ```
+В OpenWrt используйте переключатель в LuCI или команды:
 
-3. Запустите и включите сервис:
+```shell
+uci set cheburprobe.main.auto_update='0'
+uci commit cheburprobe
+/etc/init.d/cheburprobe-updater restart
+```
 
-    ```shell
-    sudo systemctl enable --now cheburprobe.service
-    ```
+Интервал проверки OpenWrt задаётся параметром `update_interval` в `/etc/config/cheburprobe`. Ручная проверка доступна независимо от настроек:
 
-4. Проверьте статус:
+```shell
+/usr/bin/cheburprobe update
+```
 
-    ```shell
-    systemctl status cheburprobe.service
-    ```
+На Windows updater скачивает новую версию и заменяет текущий executable:
 
-5. Посмотрите логи:
+```powershell
+cheburprobe.exe update
+```
 
-    ```shell
-    journalctl -u cheburprobe.service -f
-    ```
+Standalone-сборки Linux и Windows обновляются только ручной командой `cheburprobe update`.
 
-Сервис запускается с `DynamicUser=yes`, поэтому сканеру не нужен root-доступ.
+Docker-контейнер не обновляет образ автоматически. Для обновления скачайте новый образ и пересоздайте контейнер с прежними параметрами.
 
-## Запуск без установки
+## Диагностика
 
-Пример запуска из исходников:
+Если сканер не подключается:
+
+- проверьте `PROBE_ID` и `PROBE_TOKEN`;
+- убедитесь, что `MQTT_HOST` начинается с `ws://` или `wss://`;
+- проверьте доступность `MQTT_HOST:MQTT_PORT` из сети сканера;
+- изучите логи (`journalctl`, `docker logs` или `logread` — в зависимости от установки);
+- временно задайте `RUST_LOG=debug`.
+
+## Для разработчиков
+
+### Запуск из исходников
+
+Из корня репозитория:
 
 ```shell
 PROBE_ID=1 \
@@ -144,52 +264,46 @@ MQTT_PORT=443 \
 cargo run --package probe --bin cheburprobe
 ```
 
-Пример запуска через Docker:
+Те же обязательные параметры можно передать аргументами:
 
 ```shell
-docker run --rm \
-  --cap-add NET_RAW \
-  -e PROBE_ID=1 \
-  -e PROBE_TOKEN=ваш-токен \
-  -e MQTT_HOST=wss://cheburcheck.ru/mqtt \
-  -e MQTT_PORT=443 \
-  ghcr.io/lowderplay/cheburcheck-probe:latest
+cargo run --package probe --bin cheburprobe -- \
+  --probe-id <ID_СКАНЕРА> \
+  --probe-token <ТОКЕН_СКАНЕРА>
 ```
 
-## Конфигурация
+### Сборка пакетов
 
-| Параметр | Описание | Значение по умолчанию |
-| --- | --- | --- |
-| `--mqtt-host`, `MQTT_HOST` | Адрес MQTT-брокера по WebSocket. Поддерживаются `ws://` и `wss://`. | `wss://cheburcheck.ru/mqtt` |
-| `--mqtt-port`, `MQTT_PORT` | Порт MQTT-брокера. | `443` |
-| `--mqtt-connection-timeout-secs`, `MQTT_CONNECTION_TIMEOUT_SECS` | Таймаут подключения к MQTT-брокеру. | `30` |
-| `--probe-id`, `PROBE_ID` | ID сканера. | обязательно |
-| `--probe-token`, `PROBE_TOKEN` | Секретный токен сканера. | обязательно |
-| `--max-concurrent-tasks`, `MAX_CONCURRENT_TASKS` | Максимальное количество одновременных заданий. | `8` |
-| `--traceroute-retries`, `TRACEROUTE_RETRIES` | Количество одновременных TCP-попыток на каждом TTL. | `3` |
-| `RUST_LOG` | Уровень логирования. | `info` |
+Debian-пакет собирается через `cargo-deb`:
 
-`MAX_CONCURRENT_TASKS` и `TRACEROUTE_RETRIES` должны быть больше нуля. Для получения ICMP-ответов traceroute процессу требуется capability `CAP_NET_RAW`; systemd unit и Docker-образ настраивают её автоматически.
+```shell
+cargo deb --package probe -- --bin cheburprobe
+```
 
-## Как работает проверка
+Docker-образ собирается из корня репозитория:
+
+```shell
+docker build -f probe/Dockerfile -t cheburprobe:local .
+```
+
+Для сборки OpenWrt-пакета другой архитектуры задайте `OPENWRT_ARCH`:
+
+```shell
+OPENWRT_ARCH=aarch64_cortex-a53 \
+  probe/openwrt/build-apk.sh <binary> <output-dir>
+
+OPENWRT_ARCH=aarch64_cortex-a53 \
+  probe/openwrt/build-ipk.sh <binary> <output-dir>
+```
+
+### Как работает проверка
 
 После подключения сканер:
 
 1. публикует retained-статус `online` в MQTT;
 2. подписывается на конфигурацию динамического сканирования;
 3. получает задания на проверку доменов и IP-адресов;
-4. параллельно запускает SNI-проверки (для доменов) и TCP traceroute до цели, начиная со следующего после DPI узла;
+4. параллельно запускает SNI-проверки для доменов и TCP traceroute до цели, начиная со следующего после DPI узла;
 5. отправляет результат обратно в Cheburcheck.
 
-Для каждого тестового хоста сканер открывает TCP-соединение, начинает TLS-handshake с проверяемым доменом в SNI, затем отправляет простой HTTP GET-запрос.
-Проверка намеренно отключает валидацию TLS-сертификата, потому что измеряется доступность соединения, а не доверие к сертификату.
-
-## Диагностика
-
-Если сканер не подключается:
-
-- проверьте `PROBE_ID` и `PROBE_TOKEN`;
-- убедитесь, что `MQTT_HOST` начинается с `ws://` или `wss://`;
-- проверьте доступность `MQTT_HOST:MQTT_PORT` с сервера;
-- посмотрите логи через `journalctl -u cheburprobe.service -f`;
-- временно установите `RUST_LOG=debug`.
+Для каждого тестового хоста сканер открывает TCP-соединение, начинает TLS-handshake с проверяемым доменом в SNI, затем отправляет простой HTTP GET-запрос. Валидация TLS-сертификата намеренно отключена: измеряется доступность соединения, а не доверие к сертификату.

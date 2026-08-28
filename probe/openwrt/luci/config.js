@@ -56,6 +56,14 @@ return view.extend({
 		o.value('trace', _('Trace'));
 		o.default = 'info';
 
+		o = s.option(form.Flag, 'auto_update', _('Automatic updates'));
+		o.default = '1';
+		o.rmempty = false;
+
+		o = s.option(form.Value, 'update_interval', _('Update check interval'), _('Seconds'));
+		o.datatype = 'and(uinteger,min(300))';
+		o.default = '21600';
+
 		return m.render();
 	}
 });

@@ -149,11 +149,98 @@ jobs:
             rm -rf "$extract_dir"
           done
 
+      - name: Generate release body
+        uses: actions/github-script@v8
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const tag = process.env.TAG_NAME;
+            const files = fs.readdirSync('release-artifacts')
+              .filter((name) => fs.statSync(path.join('release-artifacts', name)).isFile())
+              .sort();
+
+            function describe(name) {
+              if (/^cheburchecker_.+_amd64\.deb$/.test(name)) {
+                return 'Пакет Cheburchecker для Debian Linux x86-64.';
+              }
+              if (/^cheburchecker_.+_arm64\.deb$/.test(name)) {
+                return 'Пакет Cheburchecker для Debian Linux ARM64.';
+              }
+              if (/^cheburprobe-.+-linux-amd64$/.test(name)) {
+                return 'Cheburprobe для Linux x86-64.';
+              }
+              if (/^cheburprobe-.+-linux-arm64$/.test(name)) {
+                return 'Cheburprobe для Linux ARM64.';
+              }
+              if (/^cheburprobe-.+-windows-x86_64\.exe$/.test(name)) {
+                return 'Cheburprobe для Windows x86-64.';
+              }
+              if (/^cheburprobe_.+_amd64\.deb$/.test(name)) {
+                return 'Пакет Cheburprobe для Debian Linux x86-64 с сервисом и автообновлением.';
+              }
+              if (/^cheburprobe_.+_arm64\.deb$/.test(name)) {
+                return 'Пакет Cheburprobe для Debian Linux ARM64 с сервисом и автообновлением.';
+              }
+              if (/^cheburprobe-.+_.+\.apk$/.test(name)) {
+                return 'Пакет Cheburprobe для версий OpenWrt с пакетным менеджером APK (25.12+).';
+              }
+              if (/^luci-app-cheburprobe-.+\.apk$/.test(name)) {
+                return 'Интерфейс LuCI для APK-пакета Cheburprobe.';
+              }
+              if (/^cheburprobe_.+_.+\.ipk$/.test(name)) {
+                return 'Пакет Cheburprobe для версий OpenWrt с пакетным менеджером opkg.';
+              }
+              if (/^luci-app-cheburprobe_.+_all\.ipk$/.test(name)) {
+                return 'Интерфейс LuCI для IPK-пакета Cheburprobe.';
+              }
+              return 'Файл релиза.';
+            }
+
+            const baseUrl = [
+              'https://github.com',
+              encodeURIComponent(context.repo.owner),
+              encodeURIComponent(context.repo.repo),
+              'releases',
+              'download',
+              encodeURIComponent(tag),
+            ].join('/');
+            const sourceBaseUrl = [
+              'https://github.com',
+              encodeURIComponent(context.repo.owner),
+              encodeURIComponent(context.repo.repo),
+              'blob',
+              encodeURIComponent(tag),
+            ].join('/');
+            const rows = files.map((name) => {
+              const url = baseUrl + '/' + encodeURIComponent(name);
+              return '| [`' + name + '`](' + url + ') | ' + describe(name) + ' |';
+            });
+            const body = [
+              '## Документация',
+              '',
+              '- [Cheburprobe](' + sourceBaseUrl + '/probe/README.md)',
+              '- [Cheburchecker](' + sourceBaseUrl + '/reporter/README.md)',
+              '',
+              '## Файлы релиза',
+              '',
+              '| Файл | Описание |',
+              '| --- | --- |',
+              ...rows,
+              '',
+            ].join('\n');
+
+            fs.writeFileSync('release-body.md', body);
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           draft: true
+          body_path: release-body.md
           fail_on_unmatched_files: true
           files: release-artifacts/*

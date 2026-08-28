@@ -78,10 +78,12 @@ build_apk() {
 }
 
 PROBE_ROOT="$WORK_DIR/cheburprobe"
-mkdir -p "$PROBE_ROOT/usr/bin" "$PROBE_ROOT/etc/init.d" "$PROBE_ROOT/etc/config"
+mkdir -p "$PROBE_ROOT/usr/bin" "$PROBE_ROOT/usr/libexec" "$PROBE_ROOT/etc/init.d" "$PROBE_ROOT/etc/config"
 install -m 0755 "$BINARY" "$PROBE_ROOT/usr/bin/cheburprobe"
 install -m 0755 "$ROOT_DIR/probe/openwrt/cheburprobe.init" "$PROBE_ROOT/etc/init.d/cheburprobe"
+install -m 0755 "$ROOT_DIR/probe/openwrt/cheburprobe-updater.init" "$PROBE_ROOT/etc/init.d/cheburprobe-updater"
 install -m 0600 "$ROOT_DIR/probe/openwrt/cheburprobe.config" "$PROBE_ROOT/etc/config/cheburprobe"
+install -m 0755 "$ROOT_DIR/probe/update/cheburprobe-request-update.openwrt" "$PROBE_ROOT/usr/libexec/cheburprobe-request-update"
 add_openwrt_metadata cheburprobe "$PROBE_ROOT" /etc/config/cheburprobe
 build_apk cheburprobe "$ARCH" "$PROBE_ROOT" \
 	"Dynamic network probe daemon for Cheburcheck" "" \

@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+touch /run/cheburprobe/update-requested
