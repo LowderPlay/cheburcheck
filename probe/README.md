@@ -225,6 +225,14 @@ uci commit cheburprobe
 /usr/bin/cheburprobe update
 ```
 
+На Windows updater скачивает новую версию и заменяет текущий executable:
+
+```powershell
+cheburprobe.exe update
+```
+
+Standalone-сборки Linux и Windows обновляются только ручной командой `cheburprobe update`.
+
 Docker-контейнер не обновляет образ автоматически. Для обновления скачайте новый образ и пересоздайте контейнер с прежними параметрами.
 
 ## Диагностика

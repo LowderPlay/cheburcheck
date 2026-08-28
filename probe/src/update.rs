@@ -3,15 +3,15 @@ use reqwest::{Client, Url};
 use semver::Version;
 use serde::Deserialize;
 use std::env;
+#[cfg(unix)]
 use std::fs::{File, OpenOptions};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
 
 const DEFAULT_REPOSITORY: &str = "LowderPlay/cheburcheck";
 const DEFAULT_API_BASE_URL: &str = "https://api.github.com";
-const LOCK_PATH: &str = "/tmp/cheburprobe-update.lock";
 
 #[derive(Debug, Deserialize)]
 struct Release {
@@ -29,29 +29,46 @@ enum PackageKind {
     Debian,
     Apk,
     Opkg,
+    Linux,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Windows,
 }
 
+#[cfg(unix)]
 struct UpdateLock {
     _file: File,
 }
 
+#[cfg(unix)]
 impl UpdateLock {
     fn acquire() -> Result<Option<Self>> {
+        let lock_path = env::temp_dir().join(format!(
+            "cheburprobe-update-{}.lock",
+            rustix::process::getuid().as_raw()
+        ));
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(LOCK_PATH)
-            .with_context(|| {
-                format!("failed to open update lock {LOCK_PATH}; package updates must run as root")
-            })?;
+            .open(&lock_path)
+            .with_context(|| format!("failed to open update lock {}", lock_path.display()))?;
 
         match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => Ok(Some(Self { _file: file })),
             Err(rustix::io::Errno::WOULDBLOCK) => Ok(None),
             Err(error) => Err(error).context("failed to lock updater"),
         }
+    }
+}
+
+#[cfg(windows)]
+struct UpdateLock;
+
+#[cfg(windows)]
+impl UpdateLock {
+    fn acquire() -> Result<Option<Self>> {
+        Ok(Some(Self))
     }
 }
 
@@ -168,20 +185,34 @@ fn output_text(command: &str, arguments: &[&str]) -> Result<String> {
 fn command_succeeds(command: &str, arguments: &[&str]) -> Result<bool> {
     let status = Command::new(command)
         .args(arguments)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .with_context(|| format!("failed to execute {command}"))?;
     Ok(status.success())
 }
 
 fn detect_platform() -> Result<(PackageKind, String, bool)> {
-    if command_exists("dpkg") {
+    #[cfg(windows)]
+    {
+        let architecture = match env::consts::ARCH {
+            "x86_64" => "x86_64",
+            architecture => bail!("unsupported Windows architecture: {architecture}"),
+        };
+        return Ok((PackageKind::Windows, architecture.to_owned(), false));
+    }
+
+    #[cfg(target_os = "linux")]
+    if command_exists("dpkg") && command_succeeds("dpkg-query", &["-W", "cheburprobe"])? {
         let architecture = output_text("dpkg", &["--print-architecture"])?;
         let architecture = architecture.trim();
         if !matches!(architecture, "amd64" | "arm64") {
             bail!("unsupported Debian architecture: {architecture}");
         }
         Ok((PackageKind::Debian, architecture.to_owned(), false))
-    } else if command_exists("apk") {
+    } else if command_exists("apk")
+        && command_succeeds("apk", &["info", "--exists", "cheburprobe"])?
+    {
         let architecture = output_text("apk", &["--print-arch"])?;
         let luci_installed =
             command_succeeds("apk", &["info", "--exists", "luci-app-cheburprobe"])?;
@@ -190,7 +221,11 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
             architecture.trim().to_owned(),
             luci_installed,
         ))
-    } else if command_exists("opkg") {
+    } else if command_exists("opkg")
+        && output_text("opkg", &["list-installed", "cheburprobe"])?
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some("cheburprobe"))
+    {
         let architectures = output_text("opkg", &["print-architecture"])?;
         let architecture = architectures
             .lines()
@@ -202,8 +237,16 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
             .any(|line| line.split_whitespace().next() == Some("luci-app-cheburprobe"));
         Ok((PackageKind::Opkg, architecture.to_owned(), luci_installed))
     } else {
-        bail!("no supported package manager found");
+        let architecture = match env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            architecture => bail!("unsupported standalone Linux architecture: {architecture}"),
+        };
+        Ok((PackageKind::Linux, architecture.to_owned(), false))
     }
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    bail!("updates are not supported on this operating system")
 }
 
 fn select_luci_asset<'a>(
@@ -214,7 +257,9 @@ fn select_luci_asset<'a>(
     let (prefix, suffix) = match kind {
         PackageKind::Apk => (format!("luci-app-cheburprobe-{version}-r"), ".apk"),
         PackageKind::Opkg => (format!("luci-app-cheburprobe_{version}-"), "_all.ipk"),
-        PackageKind::Debian => bail!("LuCI packages are not supported on Debian"),
+        PackageKind::Debian | PackageKind::Linux | PackageKind::Windows => {
+            bail!("LuCI packages are only supported on OpenWrt")
+        }
     };
     let matches: Vec<_> = assets
         .iter()
@@ -232,11 +277,14 @@ fn package_version(name: &str, kind: PackageKind, architecture: &str) -> Option<
         PackageKind::Debian => ("cheburprobe_", format!("_{architecture}.deb")),
         PackageKind::Apk => ("cheburprobe-", format!("_{architecture}.apk")),
         PackageKind::Opkg => ("cheburprobe_", format!("_{architecture}.ipk")),
+        PackageKind::Linux => ("cheburprobe-", format!("-linux-{architecture}")),
+        PackageKind::Windows => ("cheburprobe-", format!("-windows-{architecture}.exe")),
     };
     let version_with_revision = name.strip_prefix(prefix)?.strip_suffix(&suffix)?;
     let version = match kind {
         PackageKind::Apk => version_with_revision.rsplit_once("-r")?.0,
         PackageKind::Debian | PackageKind::Opkg => version_with_revision.rsplit_once('-')?.0,
+        PackageKind::Linux | PackageKind::Windows => version_with_revision,
     };
     Version::parse(version).ok()
 }
@@ -337,7 +385,63 @@ fn install(kind: PackageKind, package: &Path, luci_package: Option<&Path>) -> Re
             run_paths("opkg", &arguments)?;
             run_args("/etc/init.d/cheburprobe", &["restart"])
         }
+        PackageKind::Linux => replace_linux_executable(package),
+        PackageKind::Windows => replace_windows_executable(package),
     }
+}
+
+#[cfg(unix)]
+fn replace_linux_executable(package: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let executable = env::current_exe().context("failed to locate the running executable")?;
+    let replacement = executable.with_extension("new");
+    let mode = std::fs::metadata(&executable)
+        .context("failed to inspect the running executable")?
+        .permissions()
+        .mode();
+    std::fs::copy(package, &replacement)
+        .context("failed to copy the new Linux executable beside the current one")?;
+    std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(mode))
+        .context("failed to set permissions on the new Linux executable")?;
+    if let Err(error) = std::fs::rename(&replacement, &executable) {
+        let _ = std::fs::remove_file(&replacement);
+        return Err(error).context("failed to replace the Linux executable");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn replace_linux_executable(_package: &Path) -> Result<()> {
+    bail!("Linux executable replacement is unavailable on this platform")
+}
+
+#[cfg(windows)]
+fn replace_windows_executable(package: &Path) -> Result<()> {
+    let executable = env::current_exe().context("failed to locate the running executable")?;
+    let backup = executable.with_extension("old.exe");
+    match std::fs::remove_file(&backup) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("failed to remove the previous executable backup"),
+    }
+
+    std::fs::rename(&executable, &backup)
+        .context("failed to move the running executable to its backup path")?;
+    if let Err(error) = std::fs::copy(package, &executable) {
+        let _ = std::fs::rename(&backup, &executable);
+        return Err(error).context("failed to install the new Windows executable");
+    }
+
+    // The renamed executable may stay locked until this process exits. A later
+    // update removes the backup if it cannot be deleted immediately.
+    let _ = std::fs::remove_file(backup);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_windows_executable(_package: &Path) -> Result<()> {
+    bail!("Windows executable replacement is unavailable on this platform")
 }
 
 #[cfg(test)]
@@ -396,6 +500,8 @@ mod tests {
             asset("cheburprobe_0.5.0-1_aarch64_generic.ipk"),
             asset("luci-app-cheburprobe-0.5.0-r1.apk"),
             asset("luci-app-cheburprobe_0.5.0-1_all.ipk"),
+            asset("cheburprobe-0.5.0-windows-x86_64.exe"),
+            asset("cheburprobe-0.5.0-linux-amd64"),
         ];
         let version = Version::new(0, 5, 0);
         assert_eq!(
@@ -430,6 +536,20 @@ mod tests {
                 .unwrap()
                 .name,
             "luci-app-cheburprobe_0.5.0-1_all.ipk"
+        );
+        assert_eq!(
+            select_asset(&assets, PackageKind::Windows, "x86_64")
+                .unwrap()
+                .0
+                .name,
+            "cheburprobe-0.5.0-windows-x86_64.exe"
+        );
+        assert_eq!(
+            select_asset(&assets, PackageKind::Linux, "amd64")
+                .unwrap()
+                .0
+                .name,
+            "cheburprobe-0.5.0-linux-amd64"
         );
     }
 }

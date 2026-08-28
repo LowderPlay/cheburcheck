@@ -12,6 +12,7 @@ use rumqttc::{
     AsyncClient, Event, Incoming, LastWill, MqttOptions, NetworkOptions, QoS, Transport,
 };
 use std::net::IpAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -143,6 +144,7 @@ async fn main() -> Result<()> {
     ));
 
     let (client, mut eventloop) = AsyncClient::new(options, 100);
+    let mqtt_updates_enabled = Path::new(UPDATE_REQUEST_COMMAND).is_file();
     let config = Arc::new(RwLock::new(None));
     let task_semaphore = Arc::new(tokio::sync::Semaphore::new(args.max_concurrent_tasks));
     let mut network_options = NetworkOptions::new();
@@ -152,7 +154,11 @@ async fn main() -> Result<()> {
     wait_for_connection(&mut eventloop).await;
     publish_status(&client, &status_topic, &args, true, DpiHops::default()).await?;
     client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
-    subscribe_to_update_requests(&client, &args.probe_id).await?;
+    if mqtt_updates_enabled {
+        subscribe_to_update_requests(&client, &args.probe_id).await?;
+    } else {
+        debug!("MQTT-triggered updates are disabled for this standalone installation");
+    }
     client
         .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
         .await?;
@@ -171,7 +177,7 @@ async fn main() -> Result<()> {
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Incoming::Publish(publish))) => {
-                if is_update_topic(&publish.topic, &args.probe_id) {
+                if mqtt_updates_enabled && is_update_topic(&publish.topic, &args.probe_id) {
                     if publish.retain {
                         warn!("ignoring retained update request on {}", publish.topic);
                     } else {
@@ -237,7 +243,9 @@ async fn main() -> Result<()> {
                         });
                 publish_status(&client, &status_topic, &args, true, dpi_hops).await?;
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
-                subscribe_to_update_requests(&client, &args.probe_id).await?;
+                if mqtt_updates_enabled {
+                    subscribe_to_update_requests(&client, &args.probe_id).await?;
+                }
                 client
                     .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
                     .await?;
