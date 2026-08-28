@@ -77,6 +77,14 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         ));
     }
 
+    // Winsock requires a raw socket to be bound before `recvfrom`; otherwise
+    // the first drain/read fails with WSAEINVAL (10022). Binding to the address
+    // selected for the TCP connection also limits replies to the right local
+    // interface. Raw sockets do not use a transport port, so bind with port 0.
+    let mut icmp_addr = local_addr;
+    icmp_addr.set_port(0);
+    icmp.bind(&icmp_addr.into())?;
+
     tcp.write_all(&client_hello)?;
     let mut hops = Vec::with_capacity(config.max_ttl as usize);
     let mut max_icmp_time_exceeded_ttl = None;
