@@ -207,13 +207,7 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
     } else if command_exists("apk")
         && command_succeeds("apk", &["info", "--exists", "cheburprobe"])?
     {
-        let architecture = output_text("apk", &["--print-arch"])?;
-        let architecture = architecture.trim();
-        let architecture = if architecture == "aarch64" {
-            openwrt_apk_arch()?
-        } else {
-            architecture.to_owned()
-        };
+        let architecture = openwrt_apk_arch()?;
         let luci_installed =
             command_succeeds("apk", &["info", "--exists", "luci-app-cheburprobe"])?;
         Ok((PackageKind::Apk, architecture, luci_installed))
