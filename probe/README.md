@@ -44,15 +44,13 @@ Cheburcheck Probe (`cheburprobe`) — динамический сетевой с
 На Debian/Ubuntu выполните:
 
 ```shell
-curl -fsSL https://cheburcheck.ru/install-probe.sh | \
-  sudo sh
+curl -fsSL https://cheburcheck.ru/install-probe.sh | sudo sh
 ```
 
 На OpenWrt выполните от имени `root`:
 
 ```shell
-wget -qO- https://cheburcheck.ru/install-probe.sh | \
-  sh
+wget -qO- https://cheburcheck.ru/install-probe.sh | sh
 ```
 
 Перед запуском можно скачать и просмотреть скрипт отдельно:
