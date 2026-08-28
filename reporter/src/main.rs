@@ -110,7 +110,7 @@ impl Args {
         ReporterConfig {
             http: self.http,
             tx_junk: self.tx,
-            ip: self.ip.clone(),
+            ip: self.ip,
             path: self.path.clone(),
             retry_count: self.retry_count,
             timeout_secs: self.timeout_secs,
@@ -128,7 +128,7 @@ fn build_client(args: &Args, attempt: usize) -> reqwest::Result<Client> {
         .read_timeout(retry_read_timeout(args.timeout_secs, attempt))
         .timeout(Duration::from_secs(15));
 
-    Ok(client.build()?)
+    client.build()
 }
 
 fn retry_read_timeout(timeout_secs: u64, attempt: usize) -> Duration {
@@ -157,7 +157,7 @@ async fn main() -> Result<()> {
     let targets: Vec<String> = targets
         .lines()
         .take(args.count)
-        .map(|s| s.split(",").last().unwrap().to_string())
+        .map(|s| s.split(',').next_back().unwrap().to_string())
         .collect();
 
     info!(
@@ -256,9 +256,9 @@ async fn upload_results(
     let uploaded = uploaded.send().await?;
 
     if uploaded.status().is_success() {
-        info!("Uploaded ({})!", uploaded.status().to_string());
+        info!("Uploaded ({})!", uploaded.status());
     } else {
-        warn!("Upload failed: {}", uploaded.status().to_string());
+        warn!("Upload failed: {}", uploaded.status());
     }
     info!("Agency response: {}", uploaded.text().await?);
     Ok(())

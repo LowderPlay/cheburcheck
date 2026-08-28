@@ -17,9 +17,9 @@ pub struct Counter {
 impl Counter {
     pub fn save_results(&self, output: &PathBuf) -> anyhow::Result<()> {
         let mut out = csv::WriterBuilder::new().from_path(output)?;
-        out.write_record(&["target", "evidence"])?;
+        out.write_record(["target", "evidence"])?;
         for (target, evidence) in &self.results {
-            out.write_record(&[target, &evidence.to_string()])?;
+            out.write_record([target, &evidence.to_string()])?;
         }
         info!("Saved results to {:?}", output);
         Ok(())

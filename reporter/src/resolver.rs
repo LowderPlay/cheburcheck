@@ -8,14 +8,14 @@ pub struct Resolver {
 impl Resolver {
     pub fn new(ip: IpAddr) -> Resolver {
         Resolver {
-            ip: SocketAddr::from(SocketAddr::new(ip, 0)),
+            ip: SocketAddr::new(ip, 0),
         }
     }
 }
 
 impl Resolve for Resolver {
     fn resolve(&self, _: Name) -> Resolving {
-        let ip = self.ip.clone();
+        let ip = self.ip;
         Box::pin(async move { Ok(Addrs::from(Box::new(vec![ip].into_iter()))) })
     }
 }
