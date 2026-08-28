@@ -18,6 +18,7 @@ dotenvy = { version = "0.15.7" }
 governor = { version = "0.6", features = ["dashmap"] }
 rumqttc = "0.24"
 toml = "0.8"
+reqwest = { workspace = true }
 
 [build-dependencies]
 reqwest = { version = "0.12", features = ["blocking", "json"] }

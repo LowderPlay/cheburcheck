@@ -37,6 +37,12 @@ services:
       MQTT_PORT: 11883
       PROBE_TRACEROUTE_ENABLED: "${PROBE_TRACEROUTE_ENABLED:-false}"
       PROBE_RATE_LIMIT_RPM: "${PROBE_RATE_LIMIT_RPM:-5}"
+      PROBE_UPDATE_PUBLIC_BASE_URL: "${PROBE_UPDATE_PUBLIC_BASE_URL:-https://cheburcheck.ru/api/v1/probe-updates}"
+      PROBE_UPDATE_CACHE_SECONDS: "${PROBE_UPDATE_CACHE_SECONDS:-300}"
+      PROBE_UPDATE_ASSET_CACHE_DIR: /var/cache/cheburcheck/probe-updates
+      PROBE_UPDATE_ASSET_CACHE_SECONDS: "${PROBE_UPDATE_ASSET_CACHE_SECONDS:-3600}"
+      PROBE_UPDATE_DOWNLOAD_RATE_LIMIT_RPM: "${PROBE_UPDATE_DOWNLOAD_RATE_LIMIT_RPM:-2}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
     volumes:
       - database-cache:/var/cache/cheburcheck/databases
     expose:

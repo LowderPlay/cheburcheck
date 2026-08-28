@@ -10,8 +10,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
 
-const DEFAULT_REPOSITORY: &str = "LowderPlay/cheburcheck";
-const DEFAULT_API_BASE_URL: &str = "https://api.github.com";
+const DEFAULT_API_BASE_URL: &str = "https://cheburcheck.ru/api/v1/probe-updates";
 
 #[derive(Debug, Deserialize)]
 struct Release {
@@ -82,10 +81,6 @@ pub async fn run() -> Result<()> {
 }
 
 async fn update() -> Result<()> {
-    let repository =
-        env::var("CHEBURPROBE_UPDATE_REPOSITORY").unwrap_or_else(|_| DEFAULT_REPOSITORY.to_owned());
-    validate_repository(&repository)?;
-
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("the installed cheburprobe version is invalid")?;
     let client = Client::builder()
@@ -95,10 +90,7 @@ async fn update() -> Result<()> {
         .context("failed to create HTTP client")?;
     let api_base_url = env::var("CHEBURPROBE_UPDATE_API_BASE_URL")
         .unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_owned());
-    let api_url = format!(
-        "{}/repos/{repository}/releases/latest",
-        api_base_url.trim_end_matches('/')
-    );
+    let api_url = format!("{}/releases/latest", api_base_url.trim_end_matches('/'));
     let release = fetch_release(&client, &api_url).await?;
     let (kind, architecture, luci_installed) = detect_platform()?;
     let (asset, latest) = select_asset(&release.assets, kind, &architecture)?;
@@ -137,26 +129,12 @@ async fn fetch_release(client: &Client, api_url: &str) -> Result<Release> {
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .context("failed to query the latest GitHub release")?
+        .context("failed to query the latest probe release")?
         .error_for_status()
-        .context("GitHub rejected the latest-release request")?
+        .context("the update server rejected the latest-release request")?
         .json::<Release>()
         .await
-        .context("GitHub returned an invalid release document")
-}
-
-fn validate_repository(repository: &str) -> Result<()> {
-    let mut parts = repository.split('/');
-    let valid_part = |part: &str| {
-        !part.is_empty()
-            && part
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    };
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(owner), Some(repo), None) if valid_part(owner) && valid_part(repo) => Ok(()),
-        _ => bail!("invalid GitHub repository {repository:?}; expected owner/name"),
-    }
+        .context("the update server returned an invalid release document")
 }
 
 fn command_exists(command: &str) -> bool {
@@ -317,7 +295,7 @@ async fn download(client: &Client, url: Url, destination: &Path) -> Result<()> {
         .await
         .context("failed to download the update package")?
         .error_for_status()
-        .context("GitHub rejected the package download")?
+        .context("the update server rejected the package download")?
         .bytes()
         .await
         .context("failed to read the update package")?;
@@ -338,7 +316,7 @@ async fn download_asset(
         bail!("invalid release asset name: {:?}", asset.name);
     }
     let url = Url::parse(&asset.browser_download_url)
-        .context("GitHub returned an invalid release asset URL")?;
+        .context("the update server returned an invalid release asset URL")?;
     let destination = directory.join(&asset.name);
     download(client, url, &destination).await?;
     Ok(destination)
@@ -483,13 +461,6 @@ mod tests {
             ),
             Some(Version::new(1, 2, 3))
         );
-    }
-
-    #[test]
-    fn validates_repository_names() {
-        assert!(validate_repository("LowderPlay/cheburcheck").is_ok());
-        assert!(validate_repository("owner/repo/extra").is_err());
-        assert!(validate_repository("owner?x/repo").is_err());
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub struct ApiRateLimiter(KeyedRateLimiter);
 
 pub struct ProbeRateLimiter(KeyedRateLimiter);
 
+pub struct ProbeUpdateDownloadRateLimiter(KeyedRateLimiter);
+
 impl ApiRateLimiter {
     pub fn check(&self, ip: &IpAddr) -> bool {
         self.0.check_key(ip).is_ok()
@@ -22,12 +24,22 @@ impl ProbeRateLimiter {
     }
 }
 
+impl ProbeUpdateDownloadRateLimiter {
+    pub fn check(&self, ip: &IpAddr) -> bool {
+        self.0.check_key(ip).is_ok()
+    }
+}
+
 pub fn build_rate_limiter(per_minute: u32) -> ApiRateLimiter {
     ApiRateLimiter(build_limiter(per_minute))
 }
 
 pub fn build_probe_rate_limiter(per_minute: u32) -> ProbeRateLimiter {
     ProbeRateLimiter(build_limiter(per_minute))
+}
+
+pub fn build_probe_update_download_rate_limiter(per_minute: u32) -> ProbeUpdateDownloadRateLimiter {
+    ProbeUpdateDownloadRateLimiter(build_limiter(per_minute))
 }
 
 fn build_limiter(per_minute: u32) -> KeyedRateLimiter {

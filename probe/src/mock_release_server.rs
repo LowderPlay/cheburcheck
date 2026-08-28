@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Serialize;
 use std::fs;
@@ -14,9 +14,6 @@ struct Args {
 
     #[arg(long, default_value = "http://127.0.0.1:8080")]
     public_url: String,
-
-    #[arg(long, default_value = "LowderPlay/cheburcheck")]
-    repository: String,
 
     /// Directory containing .deb, .apk, and .ipk release assets.
     #[arg(long)]
@@ -36,7 +33,6 @@ struct Asset {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    validate_repository(&args.repository)?;
     let assets_dir = args
         .assets_dir
         .canonicalize()
@@ -45,18 +41,13 @@ fn main() -> Result<()> {
     let listener = TcpListener::bind(&args.bind)
         .with_context(|| format!("failed to listen on {}", args.bind))?;
 
-    println!(
-        "mock release API: {public_url}/repos/{}/releases/latest",
-        args.repository
-    );
+    println!("mock release API: {public_url}/releases/latest");
     println!("serving assets from {}", assets_dir.display());
 
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
-                if let Err(error) =
-                    handle_request(stream, &assets_dir, &args.repository, &public_url)
-                {
+                if let Err(error) = handle_request(stream, &assets_dir, &public_url) {
                     eprintln!("request failed: {error:#}");
                 }
             }
@@ -66,12 +57,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_request(
-    mut stream: TcpStream,
-    assets_dir: &Path,
-    repository: &str,
-    public_url: &str,
-) -> Result<()> {
+fn handle_request(mut stream: TcpStream, assets_dir: &Path, public_url: &str) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone().context("failed to read request")?);
     let mut request_line = String::new();
     reader
@@ -88,8 +74,7 @@ fn handle_request(
     }
     println!("request: {method} {path}");
 
-    let release_path = format!("/repos/{repository}/releases/latest");
-    if path == release_path {
+    if path == "/releases/latest" {
         let body = serde_json::to_vec(&Release {
             assets: list_assets(assets_dir, public_url)?,
         })?;
@@ -149,14 +134,6 @@ fn valid_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
-fn validate_repository(repository: &str) -> Result<()> {
-    let mut parts = repository.split('/');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some(owner), Some(repo), None) if valid_name(owner) && valid_name(repo) => Ok(()),
-        _ => bail!("invalid repository {repository:?}; expected owner/name"),
-    }
 }
 
 fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) -> Result<()> {

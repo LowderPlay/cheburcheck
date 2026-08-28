@@ -1,5 +1,5 @@
 [Unit]
-Description=Update Cheburprobe from the latest GitHub release
+Description=Update Cheburprobe from the trusted update server
 After=network-online.target
 Wants=network-online.target
 
