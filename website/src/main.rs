@@ -6,6 +6,7 @@ mod database_refresh;
 mod db;
 mod mqtt;
 mod mqtt_auth;
+mod probe_installer;
 mod whitelist;
 
 use env_logger::Env;
@@ -106,6 +107,7 @@ async fn rocket() -> _ {
         )
         .mount("/agency", routes![agency::upload_report])
         .mount("/mqtt", routes![mqtt_auth::auth, mqtt_auth::acl])
+        .mount("/", routes![probe_installer::download])
         .mount("/whitelist", routes![whitelist::export_csv])
         .register("/", catchers![api_error])
 }
