@@ -76,7 +76,12 @@ detect_platform() {
 		if command_exists apk; then
 			PLATFORM=openwrt-apk
 			PLATFORM_NAME='OpenWrt (apk)'
-			ARCH=$(apk --print-arch)
+			if [ -s /etc/apk/arch ]; then
+				ARCH=$(head -n 1 /etc/apk/arch)
+			else
+				ARCH=$(sed -n 's/^DISTRIB_ARCH=//p' /etc/openwrt_release | tr -d "'\"" | head -n 1)
+			fi
+			[ -n "$ARCH" ] || fail "OpenWrt did not report its package architecture"
 			validate_openwrt_arch "$ARCH"
 		elif command_exists opkg; then
 			PLATFORM=openwrt-opkg

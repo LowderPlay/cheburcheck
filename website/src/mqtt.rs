@@ -66,6 +66,7 @@ type ProbeStatuses = Arc<rocket::tokio::sync::RwLock<HashMap<String, ProbeStatus
 pub struct ProbeStatusSnapshot {
     pub online: bool,
     pub version: String,
+    pub bundle_type: Option<String>,
     pub dpi_hop_v4: Option<u8>,
     pub dpi_hop_v6: Option<u8>,
 }
@@ -377,6 +378,7 @@ async fn dispatch_probe_status(probe_statuses: &ProbeStatuses, topic: &str, payl
         ProbeStatusSnapshot {
             online: status.online,
             version: status.version.to_string(),
+            bundle_type: status.bundle_type.map(str::to_string),
             dpi_hop_v4: status.dpi_hop_v4,
             dpi_hop_v6: status.dpi_hop_v6,
         },
@@ -462,7 +464,7 @@ mod tests {
         dispatch_probe_status(
             &statuses,
             "probe/status/v1/42",
-            br#"{"online":false,"probe_id":"42","version":"1.2.3","dpi_hop_v4":4,"dpi_hop_v6":6}"#,
+            br#"{"online":false,"probe_id":"42","version":"1.2.3","bundle_type":"openwrt","dpi_hop_v4":4,"dpi_hop_v6":6}"#,
         )
         .await;
 
@@ -471,6 +473,7 @@ mod tests {
             Some(&ProbeStatusSnapshot {
                 online: false,
                 version: "1.2.3".to_string(),
+                bundle_type: Some("openwrt".to_string()),
                 dpi_hop_v4: Some(4),
                 dpi_hop_v6: Some(6),
             })
@@ -484,6 +487,7 @@ mod tests {
             ProbeStatusSnapshot {
                 online: true,
                 version: "1.2.3".to_string(),
+                bundle_type: None,
                 dpi_hop_v4: None,
                 dpi_hop_v6: None,
             },
