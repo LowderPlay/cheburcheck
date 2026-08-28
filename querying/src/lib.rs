@@ -100,7 +100,7 @@ impl Checker {
             }
         };
 
-        let reverse_lookup = if let Some(ip) = ips.get(0).cloned() {
+        let reverse_lookup = if let Some(ip) = ips.first().copied() {
             match self.resolver.lookup_ptr(ip).await {
                 Ok(ptr) => ptr,
                 Err(e) => {
@@ -113,7 +113,7 @@ impl Checker {
         };
 
         let geo_ip = self.geo_ip.load();
-        let geo = match ips.get(0).map(|ip| geo_ip.lookup(ip.clone())) {
+        let geo = match ips.first().map(|ip| geo_ip.lookup(*ip)) {
             None => IpInfo::default(),
             Some(Ok(ip)) => ip,
             Some(Err(e)) => {
@@ -172,12 +172,11 @@ impl Checker {
                 .collect();
 
             for prefix in &prefixes {
-                if let Ok(ipnet) = prefix.parse::<IpNet>() {
-                    if cdn_list.contains(&ipnet.network()).is_some() {
-                        if !blocked_prefixes.contains(prefix) {
-                            blocked_prefixes.push(prefix.clone());
-                        }
-                    }
+                if let Ok(ipnet) = prefix.parse::<IpNet>()
+                    && cdn_list.contains(&ipnet.network()).is_some()
+                    && !blocked_prefixes.contains(prefix)
+                {
+                    blocked_prefixes.push(prefix.clone());
                 }
             }
 
@@ -215,7 +214,7 @@ impl Checker {
     }
 
     pub fn last_update(&self) -> Option<DateTime<Utc>> {
-        self.rx.borrow().clone()
+        *self.rx.borrow()
     }
 
     pub async fn download_all() -> Result<Bases, io::Error> {

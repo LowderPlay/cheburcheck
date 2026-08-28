@@ -14,6 +14,12 @@ pub struct CdnList {
     trie: IpnetTrie<NetworkRecord>,
 }
 
+impl Default for CdnList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Eq, PartialEq, Hash)]
 pub struct NetworkRecord {
     pub provider: String,
@@ -97,6 +103,12 @@ pub struct RuBlacklist {
     pub domain_count: usize,
 }
 
+impl Default for RuBlacklist {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuBlacklist {
     pub fn new() -> RuBlacklist {
         RuBlacklist {
@@ -176,6 +188,35 @@ impl RuBlacklist {
     }
 }
 
+#[async_trait]
+impl Updatable for RuBlacklist {
+    type Base = (VecDeque<u8>, VecDeque<u8>, VecDeque<u8>);
+
+    async fn download() -> Result<Self::Base, Error> {
+        Ok((
+            VecDeque::from(
+                fetch_db(Self::get_url(
+                    "RKN_NETS",
+                    "https://antifilter.network/download/ipsum.lst",
+                ))
+                .await?,
+            ),
+            VecDeque::from(
+                fetch_db(Self::get_url(
+                    "RKN_DOMAINS",
+                    "https://antifilter.download/list/domains.lst",
+                ))
+                .await?,
+            ),
+            VecDeque::from(include_bytes!("../dist-domains.txt").to_vec()),
+        ))
+    }
+
+    async fn install(&mut self, (nets, domains, custom_domains): Self::Base) -> Result<(), Error> {
+        self.update(nets, domains, custom_domains)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::RuBlacklist;
@@ -203,34 +244,5 @@ mod tests {
             Some("custom.test".to_string())
         );
         assert_eq!(list.contains_domain("notblocked.example"), None);
-    }
-}
-
-#[async_trait]
-impl Updatable for RuBlacklist {
-    type Base = (VecDeque<u8>, VecDeque<u8>, VecDeque<u8>);
-
-    async fn download() -> Result<Self::Base, Error> {
-        Ok((
-            VecDeque::from(
-                fetch_db(Self::get_url(
-                    "RKN_NETS",
-                    "https://antifilter.network/download/ipsum.lst",
-                ))
-                .await?,
-            ),
-            VecDeque::from(
-                fetch_db(Self::get_url(
-                    "RKN_DOMAINS",
-                    "https://antifilter.download/list/domains.lst",
-                ))
-                .await?,
-            ),
-            VecDeque::from(include_bytes!("../dist-domains.txt").to_vec()),
-        ))
-    }
-
-    async fn install(&mut self, (nets, domains, custom_domains): Self::Base) -> Result<(), Error> {
-        self.update(nets, domains, custom_domains)
     }
 }

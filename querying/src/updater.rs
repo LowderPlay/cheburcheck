@@ -4,30 +4,28 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use reqwest::IntoUrl;
 use std::fmt::Display;
-use std::io;
 use std::io::Error;
 
 pub async fn fetch_db<T: IntoUrl + Display>(url: T) -> Result<Vec<u8>, Error> {
     info!("Fetching {}", url);
     let response = reqwest::get(url)
         .await
-        .map_err(|e| Error::new(io::ErrorKind::Other, e))?
+        .map_err(Error::other)?
         .error_for_status()
-        .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+        .map_err(Error::other)?;
 
     let total_size = response.content_length().unwrap_or(0);
     let pb = ProgressBar::new(total_size);
     pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .map_err(|e| Error::new(io::ErrorKind::Other, e))?
+        .map_err(Error::other)?
         .progress_chars("#>-"));
 
-    let mut bytes = Vec::new();
-    bytes.reserve(total_size as usize);
+    let mut bytes = Vec::with_capacity(total_size as usize);
     let mut stream = response.bytes_stream();
 
     while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+        let chunk = chunk_result.map_err(Error::other)?;
         bytes.extend(&chunk);
         pb.inc(chunk.len() as u64);
     }

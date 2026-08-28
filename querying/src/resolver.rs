@@ -3,7 +3,7 @@ use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::net::{DnsError, NetError};
 use hickory_resolver::proto::ProtoError;
 use hickory_resolver::proto::rr::RData;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::net::IpAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -93,6 +93,6 @@ fn map_resolve_error(error: NetError) -> ResolveError {
         {
             ResolveError::NxDomain
         }
-        _ => ResolveError::Other(Error::new(ErrorKind::Other, error)),
+        _ => ResolveError::Other(Error::other(error)),
     }
 }
