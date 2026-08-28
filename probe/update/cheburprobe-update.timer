@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically check for Cheburprobe updates
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

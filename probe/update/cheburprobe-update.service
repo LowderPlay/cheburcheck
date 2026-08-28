@@ -1,0 +1,9 @@
+[Unit]
+Description=Update Cheburprobe from the latest GitHub release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cheburprobe update
+ExecStartPost=-/usr/bin/rm -f /run/cheburprobe/update-requested

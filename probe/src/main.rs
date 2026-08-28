@@ -2,9 +2,10 @@ mod dns;
 mod dpi_hop;
 mod sni;
 mod traceroute;
+mod update;
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use log::{debug, error, info, warn};
 use reports::probe::{DpiProbeConfig, ProbeConfig, ProbeResult, ProbeStatus, ProbeTask};
 use rumqttc::{
@@ -16,6 +17,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 const CONFIG_TOPIC: &str = "probe/config/v1";
+const UPDATE_TOPIC: &str = "probe/update/v1";
+const UPDATE_REQUEST_COMMAND: &str = "/usr/libexec/cheburprobe-request-update";
 const MQTT_MAX_PACKET_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone)]
@@ -32,8 +35,17 @@ struct DpiHops {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about = "Dynamic probing daemon")]
-struct Args {
+#[command(
+    author,
+    version,
+    about = "Dynamic probing daemon",
+    subcommand_negates_reqs = true,
+    args_conflicts_with_subcommands = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(long, env = "MQTT_HOST", default_value = "wss://cheburcheck.ru/mqtt")]
     mqtt_host: String,
 
@@ -44,10 +56,10 @@ struct Args {
     mqtt_connection_timeout_secs: u64,
 
     #[arg(long, env = "PROBE_ID")]
-    probe_id: String,
+    probe_id: Option<String>,
 
     #[arg(long, env = "PROBE_TOKEN")]
-    probe_token: String,
+    probe_token: Option<String>,
 
     #[arg(long, env = "MAX_CONCURRENT_TASKS", default_value_t = 8)]
     max_concurrent_tasks: usize,
@@ -56,10 +68,52 @@ struct Args {
     traceroute_retries: u8,
 }
 
+#[derive(Debug, Clone)]
+struct Args {
+    mqtt_host: String,
+    mqtt_port: u16,
+    mqtt_connection_timeout_secs: u64,
+    probe_id: String,
+    probe_token: String,
+    max_concurrent_tasks: usize,
+    traceroute_retries: u8,
+}
+
+impl Cli {
+    fn into_daemon_args(self) -> Result<Args> {
+        Ok(Args {
+            mqtt_host: self.mqtt_host,
+            mqtt_port: self.mqtt_port,
+            mqtt_connection_timeout_secs: self.mqtt_connection_timeout_secs,
+            probe_id: self
+                .probe_id
+                .context("--probe-id or PROBE_ID is required when running the probe")?,
+            probe_token: self
+                .probe_token
+                .context("--probe-token or PROBE_TOKEN is required when running the probe")?,
+            max_concurrent_tasks: self.max_concurrent_tasks,
+            traceroute_retries: self.traceroute_retries,
+        })
+    }
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Command {
+    /// Update Cheburprobe from the latest GitHub release.
+    Update,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("failed to install the rustls ring crypto provider"))?;
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let args = Args::parse();
+    let cli = Cli::parse();
+    if matches!(cli.command, Some(Command::Update)) {
+        return update::run().await;
+    }
+    let args = cli.into_daemon_args()?;
     if args.max_concurrent_tasks == 0 {
         bail!("max_concurrent_tasks must be greater than zero");
     }
@@ -98,6 +152,7 @@ async fn main() -> Result<()> {
     wait_for_connection(&mut eventloop).await;
     publish_status(&client, &status_topic, &args, true, DpiHops::default()).await?;
     client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
+    subscribe_to_update_requests(&client, &args.probe_id).await?;
     client
         .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
         .await?;
@@ -116,17 +171,20 @@ async fn main() -> Result<()> {
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Incoming::Publish(publish))) => {
-                if publish.topic == CONFIG_TOPIC {
-                    match update_config(&config, &publish.payload).await {
-                        Ok(dpi_hops) => {
-                            if let Err(error) =
-                                publish_status(&client, &status_topic, &args, true, dpi_hops).await
-                            {
-                                warn!("failed to publish probe status with DPI hop: {error}");
-                            }
-                        }
-                        Err(error) => warn!("failed to update probe config: {error}"),
+                if is_update_topic(&publish.topic, &args.probe_id) {
+                    if publish.retain {
+                        warn!("ignoring retained update request on {}", publish.topic);
+                    } else {
+                        request_update_check();
                     }
+                } else if publish.topic == CONFIG_TOPIC {
+                    spawn_config_update(
+                        client.clone(),
+                        status_topic.clone(),
+                        args.clone(),
+                        config.clone(),
+                        publish.payload.to_vec(),
+                    );
                 } else {
                     let client = client.clone();
                     let args = args.clone();
@@ -179,6 +237,7 @@ async fn main() -> Result<()> {
                         });
                 publish_status(&client, &status_topic, &args, true, dpi_hops).await?;
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
+                subscribe_to_update_requests(&client, &args.probe_id).await?;
                 client
                     .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
                     .await?;
@@ -192,6 +251,52 @@ async fn main() -> Result<()> {
             }
         }
     }
+}
+
+fn spawn_config_update(
+    client: AsyncClient,
+    status_topic: String,
+    args: Args,
+    config: Arc<RwLock<Option<LoadedProbeConfig>>>,
+    payload: Vec<u8>,
+) {
+    tokio::spawn(async move {
+        match update_config(&config, &payload).await {
+            Ok(dpi_hops) => {
+                if let Err(error) =
+                    publish_status(&client, &status_topic, &args, true, dpi_hops).await
+                {
+                    warn!("failed to publish probe status with DPI hop: {error}");
+                }
+            }
+            Err(error) => warn!("failed to update probe config: {error}"),
+        }
+    });
+}
+
+async fn subscribe_to_update_requests(client: &AsyncClient, probe_id: &str) -> Result<()> {
+    client.subscribe(UPDATE_TOPIC, QoS::AtLeastOnce).await?;
+    client
+        .subscribe(format!("{UPDATE_TOPIC}/{probe_id}"), QoS::AtLeastOnce)
+        .await?;
+    Ok(())
+}
+
+fn is_update_topic(topic: &str, probe_id: &str) -> bool {
+    topic == UPDATE_TOPIC || topic == format!("{UPDATE_TOPIC}/{probe_id}")
+}
+
+fn request_update_check() {
+    tokio::spawn(async {
+        match tokio::process::Command::new(UPDATE_REQUEST_COMMAND)
+            .status()
+            .await
+        {
+            Ok(status) if status.success() => info!("requested an update check over MQTT"),
+            Ok(status) => warn!("update request command exited with {status}"),
+            Err(error) => warn!("failed to request an update check: {error}"),
+        }
+    });
 }
 
 fn mqtt_transport(mqtt_host: &str) -> Result<Transport> {
@@ -450,11 +555,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_update_subcommand_without_daemon_arguments() {
+        let args = Cli::try_parse_from(["cheburprobe", "update"]).unwrap();
+        assert!(matches!(args.command, Some(Command::Update)));
+    }
+
+    #[test]
+    fn preserves_daemon_invocation_without_a_subcommand() {
+        let args =
+            Cli::try_parse_from(["cheburprobe", "--probe-id", "42", "--probe-token", "secret"])
+                .unwrap()
+                .into_daemon_args()
+                .unwrap();
+        assert_eq!(args.probe_id, "42");
+        assert_eq!(args.probe_token, "secret");
+    }
+
+    #[test]
     fn extracts_job_id_from_legacy_global_and_individual_topics() {
         assert_eq!(probe_task_job_id("probe/tasks/v1/job-1"), Some("job-1"));
         assert_eq!(probe_task_job_id("probe/tasks/v1/42/job-2"), Some("job-2"));
         assert_eq!(probe_task_job_id("probe/tasks/v1"), None);
         assert_eq!(probe_task_job_id("probe/tasks/v1/42/job-2/extra"), None);
+    }
+
+    #[test]
+    fn recognizes_global_and_individual_update_topics() {
+        assert!(is_update_topic("probe/update/v1", "42"));
+        assert!(is_update_topic("probe/update/v1/42", "42"));
+        assert!(!is_update_topic("probe/update/v1/7", "42"));
+        assert!(!is_update_topic("probe/update/v1/42/extra", "42"));
     }
 
     #[test]

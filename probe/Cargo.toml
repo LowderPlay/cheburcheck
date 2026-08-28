@@ -1,6 +1,6 @@
 [package]
 name = "probe"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license-file = "../LICENSE"
 description = "Dynamic network probe daemon for Cheburcheck"
@@ -9,16 +9,23 @@ description = "Dynamic network probe daemon for Cheburcheck"
 name = "cheburprobe"
 path = "src/main.rs"
 
+[[bin]]
+name = "mock-release-server"
+path = "src/mock_release_server.rs"
+
 [package.metadata.deb]
 name = "cheburprobe"
 maintainer = "Lowder <me@lowderplay.dev>"
 maintainer-scripts = "debian/"
-systemd-units = [
-    { unit-name = "cheburprobe", enable = false, start = false },
-]
+depends = "ca-certificates"
 assets = [
     ["target/release/cheburprobe", "usr/bin/", "755"],
     ["debian/cheburprobe.default", "etc/default/cheburprobe", "644"],
+    ["debian/cheburprobe.service", "usr/lib/systemd/system/cheburprobe.service", "644"],
+    ["update/cheburprobe-request-update.debian", "usr/libexec/cheburprobe-request-update", "755"],
+    ["update/cheburprobe-update.service", "usr/lib/systemd/system/cheburprobe-update.service", "644"],
+    ["update/cheburprobe-update.timer", "usr/lib/systemd/system/cheburprobe-update.timer", "644"],
+    ["update/cheburprobe-update.path", "usr/lib/systemd/system/cheburprobe-update.path", "644"],
 ]
 
 [dependencies]
@@ -29,14 +36,17 @@ etherparse = "0.21"
 futures = "0.3"
 log = { workspace = true }
 polling = "3.11"
-rustix = { version = "1.1", features = ["net"] }
-rumqttc = { version = "0.25", features = ["use-rustls", "websocket"] }
+rustix = { version = "1.1", features = ["fs", "net"] }
+reqwest = { workspace = true, features = ["json"] }
+rumqttc = { version = "0.25", default-features = false, features = ["use-rustls-no-provider", "websocket"] }
+semver = "1.0"
 serde = { workspace = true }
 serde_json = "1.0"
+tempfile = "3.23"
 tokio = { workspace = true }
 reports = { path = "../reports" }
-rustls = "0.23"
-tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }
 rand = "0.8"
 socket2 = { version = "0.6", features = ["all"] }
-hickory-resolver = { version = "0.26.0-beta.3", features = ["tokio", "webpki-roots", "https-aws-lc-rs"] }
+hickory-resolver = { version = "0.26.0-beta.3", features = ["tokio", "webpki-roots", "https-ring"] }

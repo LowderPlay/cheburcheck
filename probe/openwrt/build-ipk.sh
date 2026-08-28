@@ -42,16 +42,24 @@ EOF
 	printf '2.0\n' > "$package_root/debian-binary"
 	(cd "$package_root/control" && tar --sort=name --owner=0 --group=0 --numeric-owner -czf ../control.tar.gz .)
 	(cd "$package_root/data" && tar --sort=name --owner=0 --group=0 --numeric-owner -czf ../data.tar.gz .)
-	(cd "$package_root" && ar r "$OUTPUT_DIR/$archive_name" debian-binary control.tar.gz data.tar.gz)
+	# OpenWrt's ipkg-build uses a gzip-compressed tar as the outer container.
+	# GNU ar appends '/' to member names; older opkg versions then fail with
+	# "pkg_init_from_file: Malformed package file".
+	(cd "$package_root" && \
+		tar --sort=name --owner=0 --group=0 --numeric-owner \
+			-cf - ./debian-binary ./data.tar.gz ./control.tar.gz | \
+		gzip -n > "$OUTPUT_DIR/$archive_name")
 	echo "$OUTPUT_DIR/$archive_name"
 }
 
 PROBE_ROOT="$WORK_DIR/cheburprobe"
 mkdir -p "$PROBE_ROOT/control" "$PROBE_ROOT/data/usr/bin" \
-	"$PROBE_ROOT/data/etc/init.d" "$PROBE_ROOT/data/etc/config"
+	"$PROBE_ROOT/data/usr/libexec" "$PROBE_ROOT/data/etc/init.d" "$PROBE_ROOT/data/etc/config"
 install -m 0755 "$BINARY" "$PROBE_ROOT/data/usr/bin/cheburprobe"
 install -m 0755 "$ROOT_DIR/probe/openwrt/cheburprobe.init" "$PROBE_ROOT/data/etc/init.d/cheburprobe"
+install -m 0755 "$ROOT_DIR/probe/openwrt/cheburprobe-updater.init" "$PROBE_ROOT/data/etc/init.d/cheburprobe-updater"
 install -m 0600 "$ROOT_DIR/probe/openwrt/cheburprobe.config" "$PROBE_ROOT/data/etc/config/cheburprobe"
+install -m 0755 "$ROOT_DIR/probe/update/cheburprobe-request-update.openwrt" "$PROBE_ROOT/data/usr/libexec/cheburprobe-request-update"
 install -m 0755 "$ROOT_DIR/probe/openwrt/cheburprobe.postinst" "$PROBE_ROOT/control/postinst"
 printf '/etc/config/cheburprobe\n' > "$PROBE_ROOT/control/conffiles"
 build_ipk cheburprobe "$ARCH" "$PROBE_ROOT" "Description: Dynamic network probe daemon for Cheburcheck

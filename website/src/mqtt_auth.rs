@@ -120,7 +120,11 @@ pub async fn acl(
 }
 
 async fn can_probe_subscribe(client_id: &str, topic: &str, pool: &PgPool) -> bool {
-    if topic == "probe/config/v1" || is_own_task_subscription(client_id, topic) {
+    if topic == "probe/config/v1"
+        || topic == "probe/update/v1"
+        || topic == format!("probe/update/v1/{client_id}")
+        || is_own_task_subscription(client_id, topic)
+    {
         return true;
     }
     if !is_global_task_subscription(topic) {
@@ -180,6 +184,14 @@ mod tests {
         assert!(!is_own_task_subscription("42", "probe/tasks/v1/7/+"));
         assert!(!is_own_task_subscription("42", "probe/tasks/v1/+/+"));
         assert!(!is_own_task_subscription("42", "probe/tasks/v1/#"));
+    }
+
+    #[rocket::async_test]
+    async fn update_subscriptions_are_node_scoped() {
+        let pool = PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+        assert!(can_probe_subscribe("42", "probe/update/v1", &pool).await);
+        assert!(can_probe_subscribe("42", "probe/update/v1/42", &pool).await);
+        assert!(!can_probe_subscribe("42", "probe/update/v1/7", &pool).await);
     }
 
     #[test]

@@ -1,5 +1,8 @@
 #!/bin/sh
 
-[ -n "${IPKG_INSTROOT:-}" ] || /etc/init.d/cheburprobe enable
+[ -n "${IPKG_INSTROOT:-}" ] || {
+	/etc/init.d/cheburprobe enable
+	/etc/init.d/cheburprobe-updater enable
+	/etc/init.d/cheburprobe-updater running || /etc/init.d/cheburprobe-updater start
+}
 exit 0
-

@@ -10,6 +10,7 @@ ExecStart=/usr/bin/cheburprobe
 Restart=always
 RestartSec=5s
 DynamicUser=yes
+RuntimeDirectory=cheburprobe
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 LimitNOFILE=16384
