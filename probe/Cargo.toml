@@ -1,6 +1,6 @@
 [package]
 name = "probe"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2024"
 license-file = "../LICENSE"
 description = "Dynamic network probe daemon for Cheburcheck"

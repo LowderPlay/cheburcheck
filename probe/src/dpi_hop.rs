@@ -2,6 +2,7 @@ use etherparse::{
     Icmpv4Type, Icmpv6Slice, Icmpv6Type, IpNumber, LaxNetSlice, LaxSlicedPacket, TransportSlice,
     icmpv4, icmpv6,
 };
+use rand::RngCore;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
@@ -11,10 +12,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStre
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-// TLS 1.3 compatibility-mode ChangeCipherSpec. RFC 8446 requires receivers
-// to silently discard this record during the handshake, making it a harmless
-// post-ClientHello TCP payload for TTL measurement.
-const TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC: &[u8] = &[20, 3, 3, 0, 1, 1];
+const PROBE_BYTES: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct DpiHopProbeConfig {
@@ -115,12 +113,10 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         tcp.write_all(&client_hello)?;
         drain_socket(&icmp)?;
 
-        if !send_with_ttl(
-            &mut tcp,
-            config.target,
-            TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC,
-            ttl,
-        )? {
+        let mut payload = [0u8; PROBE_BYTES];
+        rand::thread_rng().fill_bytes(&mut payload);
+
+        if !send_with_ttl(&mut tcp, config.target, &payload, ttl)? {
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
@@ -465,11 +461,6 @@ fn matching_quoted_tcp_tuple(packet: &[u8], local_addr: SocketAddr, target: Sock
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ttl_probe_is_tls_compatibility_change_cipher_spec() {
-        assert_eq!(TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC, [20, 3, 3, 0, 1, 1]);
-    }
 
     #[test]
     fn acknowledged_payload_marks_direct_tcp_delivery() {
