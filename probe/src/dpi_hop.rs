@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const PROBE_BYTES: usize = 256;
+const DPI_CLASSIFICATION_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct DpiHopProbeConfig {
@@ -111,6 +112,13 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             client_hello_bytes = Some(client_hello.len());
         }
         tcp.write_all(&client_hello)?;
+
+        // A blocking DPI may silently discard the ClientHello, so waiting for
+        // a TCP acknowledgement would deadlock the measurement. Give the DPI
+        // a short interval to classify this new flow before sending the
+        // TTL-limited payload instead. This is needed for every attempt because
+        // each TTL deliberately uses a fresh TCP connection.
+        std::thread::sleep(DPI_CLASSIFICATION_DELAY);
         drain_socket(&icmp)?;
 
         let mut payload = [0u8; PROBE_BYTES];
