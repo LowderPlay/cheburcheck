@@ -2585,6 +2585,7 @@ dependencies = [
  "etherparse",
  "futures",
  "hickory-resolver",
+ "libc",
  "log",
  "polling",
  "rand 0.8.5",
