@@ -2,7 +2,6 @@ use etherparse::{
     Icmpv4Type, Icmpv6Slice, Icmpv6Type, IpNumber, LaxNetSlice, LaxSlicedPacket, TransportSlice,
     icmpv4, icmpv6,
 };
-use rand::RngCore;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore};
 use socket2::{Domain, Protocol, SockRef, Socket, Type};
@@ -12,7 +11,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStre
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const PROBE_BYTES: usize = 256;
+// TLS 1.3 compatibility-mode ChangeCipherSpec. RFC 8446 requires receivers
+// to silently discard this record during the handshake, making it a harmless
+// post-ClientHello TCP payload for TTL measurement.
+const TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC: &[u8] = &[20, 3, 3, 0, 1, 1];
 
 #[derive(Debug, Clone)]
 pub struct DpiHopProbeConfig {
@@ -44,6 +46,13 @@ pub enum DpiHopProbeHopOutcome {
     IcmpTimeExceeded,
     Timeout,
     TcpClosed,
+    TcpAcknowledged,
+}
+
+impl DpiHopProbeHopOutcome {
+    pub const fn invalidates_measurement(self) -> bool {
+        matches!(self, Self::TcpClosed | Self::TcpAcknowledged)
+    }
 }
 
 pub async fn detect_dpi_hop(config: DpiHopProbeConfig) -> io::Result<DpiHopProbeResult> {
@@ -60,7 +69,6 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         ));
     }
 
-    let client_hello = make_client_hello(&config.control_sni)?;
     let (domain, protocol) = match config.target {
         SocketAddr::V4(_) => (Domain::IPV4, Protocol::ICMPV4),
         SocketAddr::V6(_) => (Domain::IPV6, Protocol::ICMPV6),
@@ -68,33 +76,51 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
     let icmp = Socket::new(domain, Type::RAW, Some(protocol))?;
     icmp.set_read_timeout(Some(config.hop_timeout))?;
 
-    let mut tcp = TcpStream::connect_timeout(&config.target, config.connect_timeout)?;
-    tcp.set_nodelay(true)?;
-    let local_addr = tcp.local_addr()?;
-    if !same_ip_family(local_addr, config.target) {
-        return Err(io::Error::other(
-            "DPI hop probe local and target address families differ",
-        ));
-    }
-
-    // Winsock requires a raw socket to be bound before `recvfrom`; otherwise
-    // the first drain/read fails with WSAEINVAL (10022). Binding to the address
-    // selected for the TCP connection also limits replies to the right local
-    // interface. Raw sockets do not use a transport port, so bind with port 0.
-    let mut icmp_addr = local_addr;
-    icmp_addr.set_port(0);
-    icmp.bind(&icmp_addr.into())?;
-
-    tcp.write_all(&client_hello)?;
+    let client_hello = make_client_hello(&config.control_sni)?;
     let mut hops = Vec::with_capacity(config.max_ttl as usize);
     let mut max_icmp_time_exceeded_ttl = None;
+    let mut result_local_addr: Option<SocketAddr> = None;
+    let mut client_hello_bytes = None;
 
     for ttl in 1..=config.max_ttl {
-        let mut payload = [0u8; PROBE_BYTES];
-        rand::thread_rng().fill_bytes(&mut payload);
+        // TCP is a byte stream: once a low-TTL segment is lost, later writes on
+        // that stream can remain queued behind it and retransmissions can use a
+        // subsequently changed socket TTL. Use an independent connection for
+        // every TTL so each hop corresponds to an actual packet and cannot
+        // affect later hops.
+        let mut tcp = TcpStream::connect_timeout(&config.target, config.connect_timeout)?;
+        tcp.set_nodelay(true)?;
+        let local_addr = tcp.local_addr()?;
+        if !same_ip_family(local_addr, config.target) {
+            return Err(io::Error::other(
+                "DPI hop probe local and target address families differ",
+            ));
+        }
+        if let Some(result_local_addr) = result_local_addr {
+            if result_local_addr.ip() != local_addr.ip() {
+                return Err(io::Error::other(
+                    "DPI hop probe changed local address between TTL attempts",
+                ));
+            }
+        } else {
+            // Winsock requires a raw socket to be bound before `recvfrom`.
+            // Binding after route selection also limits replies to the right
+            // local interface. Raw sockets do not use a transport port.
+            let mut icmp_addr = local_addr;
+            icmp_addr.set_port(0);
+            icmp.bind(&icmp_addr.into())?;
+            result_local_addr = Some(local_addr);
+            client_hello_bytes = Some(client_hello.len());
+        }
+        tcp.write_all(&client_hello)?;
         drain_socket(&icmp)?;
 
-        if !send_with_ttl(&mut tcp, config.target, &payload, ttl)? {
+        if !send_with_ttl(
+            &mut tcp,
+            config.target,
+            TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC,
+            ttl,
+        )? {
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
@@ -105,28 +131,26 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
 
         let router =
             listen_for_time_exceeded(&icmp, local_addr, config.target, config.hop_timeout)?;
-        let outcome = if router.is_some() {
+        let outcome = classify_hop(router, peer_closed(&tcp)?, tcp_payload_acknowledged(&tcp)?);
+        if outcome == DpiHopProbeHopOutcome::IcmpTimeExceeded {
             max_icmp_time_exceeded_ttl = Some(ttl);
-            DpiHopProbeHopOutcome::IcmpTimeExceeded
-        } else if peer_closed(&tcp)? {
-            DpiHopProbeHopOutcome::TcpClosed
-        } else {
-            DpiHopProbeHopOutcome::Timeout
-        };
+        }
         hops.push(DpiHopProbeHop {
             ttl,
             router,
             outcome,
         });
-        if outcome == DpiHopProbeHopOutcome::TcpClosed {
+        if outcome.invalidates_measurement() {
             break;
         }
     }
 
     Ok(DpiHopProbeResult {
         target: config.target,
-        local_addr,
-        client_hello_bytes: client_hello.len(),
+        local_addr: result_local_addr
+            .ok_or_else(|| io::Error::other("DPI hop probe made no TTL attempts"))?,
+        client_hello_bytes: client_hello_bytes
+            .ok_or_else(|| io::Error::other("DPI hop probe produced no ClientHello"))?,
         max_icmp_time_exceeded_ttl,
         hops,
     })
@@ -167,34 +191,20 @@ fn send_with_ttl(
     payload: &[u8],
     ttl: u8,
 ) -> io::Result<bool> {
-    let previous_ttl = {
-        let socket = SockRef::from(&*tcp);
-        match target {
-            SocketAddr::V4(_) => socket.ttl_v4()?,
-            SocketAddr::V6(_) => socket.unicast_hops_v6()?,
-        }
-    };
     set_ttl(tcp, target, ttl as u32)?;
-    let write_result = tcp.write_all(payload);
-    let restore_result = set_ttl(tcp, target, previous_ttl);
-    match write_result {
-        Ok(()) => {
-            restore_result?;
-            Ok(true)
-        }
+    // Keep this TTL until the per-hop connection is dropped. Retransmissions
+    // must expire at the same hop instead of escaping with the default TTL.
+    match tcp.write_all(payload) {
+        Ok(()) => Ok(true),
         Err(error)
             if matches!(
                 error.kind(),
                 io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
             ) =>
         {
-            let _ = restore_result;
             Ok(false)
         }
-        Err(error) => {
-            let _ = restore_result;
-            Err(error)
-        }
+        Err(error) => Err(error),
     }
 }
 
@@ -258,6 +268,54 @@ fn peer_closed(tcp: &TcpStream) -> io::Result<bool> {
     };
     let _ = tcp.set_nonblocking(false);
     result
+}
+
+fn classify_hop(
+    router: Option<IpAddr>,
+    peer_closed: bool,
+    payload_acknowledged: bool,
+) -> DpiHopProbeHopOutcome {
+    if router.is_some() {
+        DpiHopProbeHopOutcome::IcmpTimeExceeded
+    } else if peer_closed {
+        DpiHopProbeHopOutcome::TcpClosed
+    } else if payload_acknowledged {
+        DpiHopProbeHopOutcome::TcpAcknowledged
+    } else {
+        DpiHopProbeHopOutcome::Timeout
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tcp_payload_acknowledged(tcp: &TcpStream) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let mut info = std::mem::MaybeUninit::<libc::tcp_info>::zeroed();
+    let mut length = std::mem::size_of::<libc::tcp_info>() as libc::socklen_t;
+    // SAFETY: `info` points to writable storage of `length` bytes, and both
+    // pointers remain valid for the duration of `getsockopt`.
+    let result = unsafe {
+        libc::getsockopt(
+            tcp.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_INFO,
+            info.as_mut_ptr().cast(),
+            &mut length,
+        )
+    };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // Linux initialized the returned prefix, which includes `tcpi_unacked`.
+    let info = unsafe { info.assume_init() };
+    Ok(info.tcpi_unacked == 0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tcp_payload_acknowledged(_tcp: &TcpStream) -> io::Result<bool> {
+    // TCP acknowledgment state is not exposed portably. Other platforms keep
+    // the previous conservative behavior and never infer direct delivery.
+    Ok(false)
 }
 
 fn drain_socket(socket: &Socket) -> io::Result<usize> {
@@ -407,6 +465,28 @@ fn matching_quoted_tcp_tuple(packet: &[u8], local_addr: SocketAddr, target: Sock
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ttl_probe_is_tls_compatibility_change_cipher_spec() {
+        assert_eq!(TLS_COMPATIBILITY_CHANGE_CIPHER_SPEC, [20, 3, 3, 0, 1, 1]);
+    }
+
+    #[test]
+    fn acknowledged_payload_marks_direct_tcp_delivery() {
+        assert_eq!(
+            classify_hop(None, false, true),
+            DpiHopProbeHopOutcome::TcpAcknowledged
+        );
+        assert!(DpiHopProbeHopOutcome::TcpAcknowledged.invalidates_measurement());
+    }
+
+    #[test]
+    fn icmp_response_takes_precedence_over_tcp_state() {
+        assert_eq!(
+            classify_hop(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), true, true),
+            DpiHopProbeHopOutcome::IcmpTimeExceeded
+        );
+    }
 
     #[test]
     fn matches_icmp_time_exceeded_quote_by_flow_tuple() {

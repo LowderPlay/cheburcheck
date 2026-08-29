@@ -416,14 +416,14 @@ fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
             result.target, hop.ttl, hop.router, hop.outcome
         );
     }
-    if let Some(closed_hop) = result
+    if let Some(invalid_hop) = result
         .hops
         .iter()
-        .find(|hop| hop.outcome == dpi_hop::DpiHopProbeHopOutcome::TcpClosed)
+        .find(|hop| hop.outcome.invalidates_measurement())
     {
         warn!(
-            "DPI hop measurement for {} is invalid: TCP connection closed at TTL {}",
-            result.target, closed_hop.ttl
+            "DPI hop measurement for {} is invalid: {:?} at TTL {}",
+            result.target, invalid_hop.outcome, invalid_hop.ttl
         );
         return None;
     }
@@ -641,19 +641,24 @@ mod tests {
     }
 
     #[test]
-    fn tcp_closed_invalidates_only_its_measurement() {
-        let result = dpi_hop::DpiHopProbeResult {
-            target: "[2001:db8::10]:443".parse().unwrap(),
-            local_addr: "[2001:db8::1]:45000".parse().unwrap(),
-            client_hello_bytes: 256,
-            max_icmp_time_exceeded_ttl: Some(4),
-            hops: vec![dpi_hop::DpiHopProbeHop {
-                ttl: 5,
-                router: None,
-                outcome: dpi_hop::DpiHopProbeHopOutcome::TcpClosed,
-            }],
-        };
+    fn direct_tcp_delivery_invalidates_only_its_measurement() {
+        for outcome in [
+            dpi_hop::DpiHopProbeHopOutcome::TcpClosed,
+            dpi_hop::DpiHopProbeHopOutcome::TcpAcknowledged,
+        ] {
+            let result = dpi_hop::DpiHopProbeResult {
+                target: "[2001:db8::10]:443".parse().unwrap(),
+                local_addr: "[2001:db8::1]:45000".parse().unwrap(),
+                client_hello_bytes: 256,
+                max_icmp_time_exceeded_ttl: Some(4),
+                hops: vec![dpi_hop::DpiHopProbeHop {
+                    ttl: 5,
+                    router: None,
+                    outcome,
+                }],
+            };
 
-        assert_eq!(dpi_hop_from_result(&result), None);
+            assert_eq!(dpi_hop_from_result(&result), None);
+        }
     }
 }
