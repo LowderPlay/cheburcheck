@@ -32,6 +32,14 @@ enum Verbosity {
     All,
 }
 
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    match value.parse::<usize>() {
+        Ok(value) if value > 0 => Ok(value),
+        Ok(_) => Err("значение должно быть больше нуля".to_string()),
+        Err(error) => Err(format!("некорректное целое число: {error}")),
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 #[command(
     author,
@@ -57,7 +65,7 @@ struct Args {
     timeout_secs: u64,
 
     /// Maximum concurrent probes. Make sure that it doesn't exceed 'ulimit -n'
-    #[arg(short, long = "probes", default_value_t = 1000)]
+    #[arg(short, long = "probes", default_value_t = 1000, value_parser = parse_positive_usize)]
     probe_count: usize,
 
     /// Display probing results in console
@@ -65,7 +73,7 @@ struct Args {
     verbosity: Verbosity,
 
     /// Attempts to establish connection
-    #[arg(short, long, default_value_t = 2)]
+    #[arg(short, long, default_value_t = 2, value_parser = parse_positive_usize)]
     retry_count: usize,
 
     /// Try using plain HTTP without TLS
@@ -102,7 +110,7 @@ impl Args {
         ReporterConfig {
             http: self.http,
             tx_junk: self.tx,
-            ip: self.ip.clone(),
+            ip: self.ip,
             path: self.path.clone(),
             retry_count: self.retry_count,
             timeout_secs: self.timeout_secs,
@@ -117,10 +125,14 @@ fn build_client(args: &Args, attempt: usize) -> reqwest::Result<Client> {
         .redirect(Policy::none())
         .use_rustls_tls()
         .dns_resolver(Arc::new(Resolver::new(args.ip)))
-        .read_timeout(Duration::from_secs(args.timeout_secs * attempt as u64))
+        .read_timeout(retry_read_timeout(args.timeout_secs, attempt))
         .timeout(Duration::from_secs(15));
 
-    Ok(client.build()?)
+    client.build()
+}
+
+fn retry_read_timeout(timeout_secs: u64, attempt: usize) -> Duration {
+    Duration::from_secs(timeout_secs.saturating_mul(attempt as u64))
 }
 
 #[tokio::main]
@@ -145,7 +157,7 @@ async fn main() -> Result<()> {
     let targets: Vec<String> = targets
         .lines()
         .take(args.count)
-        .map(|s| s.split(",").last().unwrap().to_string())
+        .map(|s| s.split(',').next_back().unwrap().to_string())
         .collect();
 
     info!(
@@ -244,9 +256,9 @@ async fn upload_results(
     let uploaded = uploaded.send().await?;
 
     if uploaded.status().is_success() {
-        info!("Uploaded ({})!", uploaded.status().to_string());
+        info!("Uploaded ({})!", uploaded.status());
     } else {
-        warn!("Upload failed: {}", uploaded.status().to_string());
+        warn!("Upload failed: {}", uploaded.status());
     }
     info!("Agency response: {}", uploaded.text().await?);
     Ok(())
@@ -288,7 +300,7 @@ async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Err
 
     loop {
         attempts += 1;
-        let client = build_client(&args, 1)?;
+        let client = build_client(args, attempts)?;
         let mut resp = client.get(&url).header("Range", "bytes=0-65536");
         if args.tx {
             resp = resp.body(JUNK)
@@ -339,5 +351,24 @@ async fn check_target(args: &Args, target: &str) -> Result<Verdict, reqwest::Err
                 }
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_positive_usize, retry_read_timeout};
+    use std::time::Duration;
+
+    #[test]
+    fn positive_usize_rejects_zero() {
+        assert_eq!(parse_positive_usize("1"), Ok(1));
+        assert!(parse_positive_usize("0").is_err());
+        assert!(parse_positive_usize("not-a-number").is_err());
+    }
+
+    #[test]
+    fn retry_timeout_grows_with_attempt_number() {
+        assert_eq!(retry_read_timeout(5, 1), Duration::from_secs(5));
+        assert_eq!(retry_read_timeout(5, 3), Duration::from_secs(15));
     }
 }

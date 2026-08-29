@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use maxminddb::geoip2::{City, Country};
 use maxminddb::{MaxMindDbError, geoip2};
 use serde::Serialize;
-use std::io;
 use std::io::Error;
 use std::net::IpAddr;
 
@@ -31,6 +30,12 @@ impl Default for IpInfo {
             city_geo_name_id: None,
             location: "-".to_string(),
         }
+    }
+}
+
+impl Default for GeoIp {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -80,11 +85,10 @@ impl GeoIp {
 
         let country_code = country
             .as_ref()
-            .map(|c| c.country.iso_code)
-            .flatten()
+            .and_then(|c| c.country.iso_code)
             .map(|c| c.to_string());
 
-        let city_geo_name_id = city.as_ref().map(|c| c.city.geoname_id).flatten();
+        let city_geo_name_id = city.as_ref().and_then(|c| c.city.geoname_id);
 
         let mut location = (None, None);
         if let Some(city) = city {
@@ -141,7 +145,6 @@ impl Updatable for GeoIp {
     }
 
     async fn install(&mut self, (asn, country, city): Self::Base) -> Result<(), Error> {
-        self.update(asn, country, city)
-            .map_err(|e| Error::new(io::ErrorKind::Other, e))
+        self.update(asn, country, city).map_err(Error::other)
     }
 }

@@ -98,7 +98,7 @@ impl<'r> FromRequest<'r> for Agency {
         let mut db = try_outcome!(
             pool.acquire()
                 .await
-                .map_err(|e| Some(e))
+                .map_err(Some)
                 .or_forward(Status::InternalServerError)
         );
         let token = request.headers().get_one("Authorization");
@@ -114,7 +114,7 @@ impl<'r> FromRequest<'r> for Agency {
             sqlx::query!("SELECT id, name FROM reporters WHERE token = $1", token)
                 .fetch_optional(&mut *db)
                 .await
-                .map_err(|e| Some(e))
+                .map_err(Some)
                 .or_forward(Status::InternalServerError)
         );
         agency
@@ -152,7 +152,6 @@ pub async fn check_whitelist(
     )
     .fetch_optional(db)
     .await
-    .into()
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -190,5 +189,4 @@ ORDER BY b.bin;",
     )
     .fetch_all(db)
     .await
-    .into()
 }

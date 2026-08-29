@@ -142,8 +142,7 @@ impl DatabaseCache {
                 },
             ],
         };
-        let metadata = serde_json::to_vec_pretty(&metadata)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let metadata = serde_json::to_vec_pretty(&metadata).map_err(io::Error::other)?;
         self.write_file(METADATA_FILE, &metadata)
     }
 

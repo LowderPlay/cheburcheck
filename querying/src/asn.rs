@@ -129,6 +129,12 @@ pub struct AsnCache {
     cache: Arc<RwLock<HashMap<u32, CachedAsnData>>>,
 }
 
+impl Default for AsnCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsnCache {
     pub fn new() -> Self {
         Self {

@@ -17,9 +17,9 @@ pub struct Counter {
 impl Counter {
     pub fn save_results(&self, output: &PathBuf) -> anyhow::Result<()> {
         let mut out = csv::WriterBuilder::new().from_path(output)?;
-        out.write_record(&["target", "evidence"])?;
+        out.write_record(["target", "evidence"])?;
         for (target, evidence) in &self.results {
-            out.write_record(&[target, &evidence.to_string()])?;
+            out.write_record([target, &evidence.to_string()])?;
         }
         info!("Saved results to {:?}", output);
         Ok(())
@@ -59,16 +59,51 @@ impl Counter {
 impl Display for Counter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let total = self.total();
+        let percentage = |count| {
+            if total == 0 {
+                0.0
+            } else {
+                count as f32 / total as f32 * 100.0
+            }
+        };
         write!(
             f,
             "OK {} ({:.2}%) | Blocked {} (early: {}) ({:.2}%) | Error {} ({:.2}%)",
             self.ok,
-            self.ok as f32 / total as f32 * 100.0,
+            percentage(self.ok),
             self.block,
             self.early,
-            self.block as f32 / total as f32 * 100.0,
+            percentage(self.block),
             self.err,
-            self.err as f32 / total as f32 * 100.0
+            percentage(self.err)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Counter;
+    use reports::Evidence;
+
+    #[test]
+    fn empty_counter_uses_zero_percentages() {
+        assert_eq!(
+            Counter::default().to_string(),
+            "OK 0 (0.00%) | Blocked 0 (early: 0) (0.00%) | Error 0 (0.00%)"
+        );
+    }
+
+    #[test]
+    fn counter_tracks_all_evidence_classes() {
+        let mut counter = Counter::default();
+        counter.add("ok.example", Evidence::Ok);
+        counter.add("blocked.example", Evidence::Blocked);
+        counter.add("error.example", Evidence::ConnectError);
+
+        assert_eq!(counter.total(), 3);
+        assert_eq!(
+            counter.to_string(),
+            "OK 1 (33.33%) | Blocked 1 (early: 0) (33.33%) | Error 1 (33.33%)"
+        );
     }
 }

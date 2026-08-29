@@ -17,26 +17,27 @@ pub enum Target {
 
 impl From<&str> for Target {
     fn from(input: &str) -> Self {
-        if input.to_lowercase().starts_with("as") {
-            if let Ok(asn) = input[2..].parse::<u32>() {
-                if asn >= 1 {
-                    return Target::Asn(asn);
-                }
-            }
+        if input
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("as"))
+            && let Ok(asn) = input[2..].parse::<u32>()
+            && asn >= 1
+        {
+            return Target::Asn(asn);
         }
 
-        if input.contains('/') {
-            if let Ok(ipv4_net) = input.parse::<Ipv4Net>() {
-                if ipv4_net.prefix_len() >= 8 {
-                    return Target::Ipv4Subnet(ipv4_net);
-                }
-            }
+        if input.contains('/')
+            && let Ok(ipv4_net) = input.parse::<Ipv4Net>()
+            && ipv4_net.prefix_len() >= 8
+        {
+            return Target::Ipv4Subnet(ipv4_net);
+        }
 
-            if let Ok(ipv6_net) = input.parse::<Ipv6Net>() {
-                if ipv6_net.prefix_len() >= 32 {
-                    return Target::Ipv6Subnet(ipv6_net);
-                }
-            }
+        if input.contains('/')
+            && let Ok(ipv6_net) = input.parse::<Ipv6Net>()
+            && ipv6_net.prefix_len() >= 32
+        {
+            return Target::Ipv6Subnet(ipv6_net);
         }
 
         if let Ok(ipv4) = input.parse::<Ipv4Addr>() {
@@ -47,10 +48,10 @@ impl From<&str> for Target {
             return Target::Ipv6(ipv6);
         }
 
-        if let Ok(url) = input.parse::<Url>() {
-            if let Some(host) = url.host_str() {
-                return Target::Domain(host.trim_end_matches('.').to_string());
-            }
+        if let Ok(url) = input.parse::<Url>()
+            && let Some(host) = url.host_str()
+        {
+            return Target::Domain(host.trim_end_matches('.').to_string());
         }
         Target::Domain(input.trim_end_matches('.').to_string())
     }

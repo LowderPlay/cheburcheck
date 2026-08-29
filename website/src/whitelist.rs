@@ -39,20 +39,14 @@ pub async fn export_csv(
         }
     };
 
-    let mut db = pool
-        .acquire()
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut db = pool.acquire().await.map_err(io::Error::other)?;
 
-    let mut stream = db
-        .copy_out_raw(query)
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut stream = db.copy_out_raw(query).await.map_err(io::Error::other)?;
 
     let mut data = Vec::default();
 
     while let Some(bytes_result) = stream.next().await {
-        let bytes = bytes_result.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let bytes = bytes_result.map_err(io::Error::other)?;
         data.extend(bytes)
     }
 
@@ -75,7 +69,7 @@ pub async fn histogram(
         .await
         .map_err(|_| Status::InternalServerError)?;
     Ok(Json(
-        collect_histogram(&mut *db, 50, limit, filter.is_some())
+        collect_histogram(&mut db, 50, limit, filter.is_some())
             .await
             .map_err(|_| Status::InternalServerError)?,
     ))
