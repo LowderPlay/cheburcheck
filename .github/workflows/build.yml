@@ -57,7 +57,7 @@ jobs:
         with:
           command: build
           target: "aarch64-unknown-linux-gnu"
-          args: "--release --bin cheburchecker"
+          args: "--release --package reporter --bin cheburchecker"
           strip: true
 
       - name: Create Debian archive
@@ -80,7 +80,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release --bin cheburchecker
+        run: cargo build --release --package reporter --bin cheburchecker
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
