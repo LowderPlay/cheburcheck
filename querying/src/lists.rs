@@ -64,14 +64,14 @@ impl CdnList {
             let record: NetworkRecord = result?;
             trie.insert(record.cidr, record);
         }
-        let (v4, v6) = trie.ip_count();
-        info!("ip count: v4={}, v6={}", v4, v6);
+        let count = trie.ip_count();
+        info!("ip count: v4={}, v6={:?}", count.ipv4, count.ipv6);
         self.trie = trie;
         Ok(())
     }
 
-    pub fn v4_count(&self) -> u32 {
-        self.trie.ip_count().0
+    pub fn v4_count(&self) -> u64 {
+        self.trie.ip_count().ipv4
     }
 
     pub fn contains(&self, ip: &IpAddr) -> Option<NetworkRecord> {
@@ -141,8 +141,8 @@ impl RuBlacklist {
                 IpNet::from_str(&net).map_err(|e| Error::new(io::ErrorKind::InvalidData, e))?;
             ip_trie.insert(net, ());
         }
-        let (v4, v6) = ip_trie.ip_count();
-        info!("ip count: v4={}, v6={}", v4, v6);
+        let count = ip_trie.ip_count();
+        info!("ip count: v4={}, v6={:?}", count.ipv4, count.ipv6);
         self.ip_trie = ip_trie;
 
         let mut blocked_domains = Vec::new();
@@ -160,8 +160,8 @@ impl RuBlacklist {
         Ok(())
     }
 
-    pub fn v4_count(&self) -> u32 {
-        self.ip_trie.ip_count().0
+    pub fn v4_count(&self) -> u64 {
+        self.ip_trie.ip_count().ipv4
     }
 
     pub fn contains_ip(&self, ip: &IpAddr) -> Option<IpNet> {
@@ -219,8 +219,19 @@ impl Updatable for RuBlacklist {
 
 #[cfg(test)]
 mod tests {
-    use super::RuBlacklist;
+    use super::{CdnList, RuBlacklist};
     use std::io::Cursor;
+
+    #[test]
+    fn ipv4_counts_can_represent_the_entire_address_space() {
+        let cdn = CdnList::load(Cursor::new("provider,cidr,region\nexample,0.0.0.0/0,\n")).unwrap();
+        let blacklist =
+            RuBlacklist::load(Cursor::new("0.0.0.0/0\n"), Cursor::new(""), Cursor::new(""))
+                .unwrap();
+
+        assert_eq!(cdn.v4_count(), 1_u64 << 32);
+        assert_eq!(blacklist.v4_count(), 1_u64 << 32);
+    }
 
     #[test]
     fn domain_lookup_matches_subdomains_on_label_boundaries() {

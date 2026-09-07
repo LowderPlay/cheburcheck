@@ -77,7 +77,7 @@ impl Resolver {
             .map_err(map_resolve_error)?
             .answers()
             .iter()
-            .filter_map(|record| match record.data() {
+            .filter_map(|record| match &record.data {
                 RData::PTR(ptr) => Some(ptr.to_string().trim_end_matches('.').to_string()),
                 _ => None,
             })
