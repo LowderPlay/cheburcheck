@@ -1,10 +1,11 @@
 use anyhow::{Result, bail};
 use futures::future::join_all;
-use log::warn;
+use log::{debug, warn};
 use reports::probe::{Host, HostProbeResult, ProbeConfig, ProbeEvidence};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme};
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -57,12 +58,16 @@ async fn probe_host(host: &Host, target: &str) -> ProbeEvidence {
 
     let server_name = match ServerName::try_from(target.to_string()) {
         Ok(server_name) => server_name,
-        Err(_) => return ProbeEvidence::ClientHello,
+        Err(_) => return ProbeEvidence::ConnectionError,
     };
 
     let mut tls = match time::timeout(timeout, connector.connect(server_name, tcp)).await {
         Ok(Ok(tls)) => tls,
-        Ok(Err(_)) | Err(_) => return ProbeEvidence::ClientHello,
+        Ok(Err(e)) if e.kind() == io::ErrorKind::InvalidData => {
+            debug!("TLS handshake error for host {}: {:?}", host.host, e);
+            return ProbeEvidence::ConnectionError;
+        }
+        _ => return ProbeEvidence::ClientHello,
     };
 
     let request = format!(

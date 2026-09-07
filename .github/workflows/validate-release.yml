@@ -1,0 +1,24 @@
+name: Validate component version
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+    outputs:
+      version:
+        value: ${{ jobs.validate.outputs.version }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate release tag
+        id: version
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: python3 .github/scripts/validate-release.py "$COMPONENT"

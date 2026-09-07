@@ -1,4 +1,5 @@
 use crate::api::ProbeUpdateDownloadRateLimiter;
+use anyhow::Context;
 use log::error;
 use reqwest::Client;
 use rocket::State;
@@ -6,6 +7,7 @@ use rocket::http::{ContentType, Status};
 use rocket::serde::json::Json;
 use rocket::tokio::sync::Mutex;
 use rocket_client_addr::ClientRealAddr;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,7 +39,64 @@ struct CachedRelease {
 
 #[derive(Clone, Debug, Deserialize)]
 struct GithubRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
     assets: Vec<GithubAsset>,
+}
+
+impl GithubRelease {
+    fn probe_version(&self) -> Option<Version> {
+        if self.draft || self.prerelease {
+            return None;
+        }
+        // Legacy v* tags used the website version. Read the probe version from
+        // a standalone binary instead, never compare the two version streams.
+        let version =
+            if let Some(version) = self.tag_name.strip_prefix("probe-v") {
+                if !self.assets.iter().any(|asset| {
+                    valid_asset_name(&asset.name) && asset.name.starts_with("cheburprobe")
+                }) {
+                    return None;
+                }
+                Version::parse(version).ok()?
+            } else {
+                let legacy = Version::parse(self.tag_name.strip_prefix('v')?).ok()?;
+                if !legacy.pre.is_empty() {
+                    return None;
+                }
+                self.assets
+                    .iter()
+                    .filter_map(|asset| {
+                        let name = asset.name.strip_prefix("cheburprobe-")?;
+                        let version = name
+                            .strip_suffix("-linux-amd64")
+                            .or_else(|| name.strip_suffix("-linux-arm64"))
+                            .or_else(|| name.strip_suffix("-windows-x86_64.exe"))?;
+                        Version::parse(version)
+                            .ok()
+                            .filter(|version| version.pre.is_empty())
+                    })
+                    .max_by(Version::cmp_precedence)?
+            };
+        version.pre.is_empty().then_some(version)
+    }
+}
+
+// Keep the first legacy release only as a fallback. Component releases take
+// precedence, and the caller stops pagination as soon as one is found.
+fn select_probe_release(
+    candidate: GithubRelease,
+    legacy: &mut Option<GithubRelease>,
+) -> Option<GithubRelease> {
+    candidate.probe_version()?;
+    if candidate.tag_name.starts_with("probe-v") {
+        return Some(candidate);
+    }
+    if legacy.is_none() {
+        *legacy = Some(candidate);
+    }
+    None
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -107,7 +166,33 @@ impl ProbeUpdateProxy {
         }
     }
 
-    async fn release(&self) -> Result<Release, reqwest::Error> {
+    async fn latest_github_release(&self, releases_url: &str) -> anyhow::Result<GithubRelease> {
+        let mut legacy = None;
+        let mut page = 1_u64;
+        loop {
+            let releases = self
+                .github_request(releases_url, "application/vnd.github+json")
+                .query(&[("per_page", 100), ("page", page)])
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<Vec<GithubRelease>>()
+                .await?;
+            let last_page = releases.len() < 100;
+            for release in releases {
+                if let Some(release) = select_probe_release(release, &mut legacy) {
+                    return Ok(release);
+                }
+            }
+            if last_page {
+                break;
+            }
+            page += 1;
+        }
+        legacy.context("no published stable probe release with probe assets found")
+    }
+
+    async fn release(&self) -> anyhow::Result<Release> {
         let mut cache = self.cache.lock().await;
         if let Some(cached) = cache.as_ref()
             && cached.fetched_at.elapsed() < self.cache_ttl
@@ -115,14 +200,8 @@ impl ProbeUpdateProxy {
             return Ok(cached.release.clone());
         }
 
-        let url = format!("{GITHUB_API_BASE_URL}/repos/{DEFAULT_REPOSITORY}/releases/latest");
-        let github_release = self
-            .github_request(&url, "application/vnd.github+json")
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<GithubRelease>()
-            .await?;
+        let url = format!("{GITHUB_API_BASE_URL}/repos/{DEFAULT_REPOSITORY}/releases");
+        let github_release = self.latest_github_release(&url).await?;
         let release = Release {
             assets: github_release
                 .assets
@@ -269,6 +348,118 @@ fn valid_asset_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release(tag: &str, probe_version: &str) -> GithubRelease {
+        GithubRelease {
+            tag_name: tag.to_owned(),
+            draft: false,
+            prerelease: false,
+            assets: vec![GithubAsset {
+                id: 42,
+                name: format!("cheburprobe-{probe_version}-linux-amd64"),
+            }],
+        }
+    }
+
+    #[test]
+    fn selects_first_stable_probe_release_in_api_order() {
+        let mut legacy = None;
+        let selected = [
+            release("website-v9.0.0", "9.0.0"),
+            release("reporter-v9.0.0", "9.0.0"),
+            release("probe-v0.9.0", "0.9.0"),
+            release("probe-v0.10.0", "0.10.0"),
+        ]
+        .into_iter()
+        .find_map(|candidate| select_probe_release(candidate, &mut legacy));
+        assert_eq!(selected.unwrap().tag_name, "probe-v0.9.0");
+    }
+
+    #[test]
+    fn ignores_drafts_prereleases_invalid_tags_and_missing_probe_assets() {
+        let mut draft = release("probe-v8.0.0", "8.0.0");
+        draft.draft = true;
+        let mut prerelease = release("probe-v9.0.0", "9.0.0");
+        prerelease.prerelease = true;
+        let mut empty = release("probe-v10.0.0", "10.0.0");
+        empty.assets.clear();
+        let mut luci_only = release("probe-v11.0.0", "11.0.0");
+        luci_only.assets[0].name = "luci-app-cheburprobe-11.0.0-r1.apk".to_owned();
+        for candidate in [
+            draft,
+            prerelease,
+            empty,
+            luci_only,
+            release("probe-v12.0.0-rc.1", "12.0.0-rc.1"),
+            release("probe-vinvalid", "13.0.0"),
+            release("v14.0.0-rc.1", "14.0.0"),
+            release("v14.0.0", "14.0.0-rc.1"),
+        ] {
+            assert_eq!(candidate.probe_version(), None, "{}", candidate.tag_name);
+        }
+    }
+
+    #[test]
+    fn keeps_first_legacy_release_as_fallback_but_prefers_component_release() {
+        let mut legacy = None;
+        assert_eq!(
+            release("v9.0.0", "0.6.4").probe_version(),
+            Some(Version::new(0, 6, 4))
+        );
+        assert!(select_probe_release(release("v9.0.0", "0.6.4"), &mut legacy).is_none());
+        assert!(select_probe_release(release("v10.0.0", "0.6.5"), &mut legacy).is_none());
+        assert_eq!(legacy.as_ref().unwrap().tag_name, "v9.0.0");
+        let selected = select_probe_release(release("probe-v0.6.3", "0.6.3"), &mut legacy);
+        assert_eq!(selected.unwrap().tag_name, "probe-v0.6.3");
+    }
+
+    // Both pages are full: returning the match must avoid requesting page three.
+    // Page one contains only releases of a different component.
+    #[rocket::async_test]
+    async fn stops_pagination_on_first_matching_release() {
+        use rocket::tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = rocket::tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!("http://{}/releases", listener.local_addr().unwrap());
+        let server = rocket::tokio::spawn(async move {
+            for page in 1..=2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut buffer = [0; 1024];
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(&format!("GET /releases?per_page=100&page={page} ")));
+                let item = if page == 1 {
+                    r#"{"tag_name":"website-v9.0.0","draft":false,"prerelease":false,"assets":[]}"#
+                } else {
+                    r#"{"tag_name":"probe-v0.6.5","draft":false,"prerelease":false,"assets":[{"id":42,"name":"cheburprobe-0.6.5-linux-amd64"}]}"#
+                };
+                let body = format!("[{}]", vec![item; 100].join(","));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let mut proxy = ProbeUpdateProxy::from_env().unwrap();
+        proxy.github_token = None;
+        let selected =
+            rocket::tokio::time::timeout(Duration::from_secs(5), proxy.latest_github_release(&url))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(selected.tag_name, "probe-v0.6.5");
+        server.await.unwrap();
+    }
 
     #[test]
     fn accepts_only_probe_release_asset_names() {

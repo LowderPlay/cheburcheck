@@ -3,7 +3,7 @@ name: Build Probe
 on:
   push:
     branches: [ master ]
-    tags: [ 'v*.*.*' ]
+    tags: [ 'probe-v*.*.*' ]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +14,13 @@ env:
   OPENWRT_ARM64_ARCHES: aarch64_generic aarch64_cortex-a53 aarch64_cortex-a72
 
 jobs:
+  validate:
+    uses: ./.github/workflows/validate-release.yml
+    with:
+      component: probe
+
   linux-amd64:
+    needs: validate
     name: Linux amd64 binary and .deb
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +64,7 @@ jobs:
           compression-level: 0
 
   linux-arm64:
+    needs: validate
     name: Linux arm64 binary, .deb, and OpenWrt packages
     runs-on: ubuntu-latest
     steps:
@@ -134,6 +141,7 @@ jobs:
           compression-level: 0
 
   windows-amd64:
+    needs: validate
     name: Windows amd64 binary
     runs-on: windows-latest
     steps:
@@ -160,6 +168,7 @@ jobs:
           compression-level: 0
 
   docker:
+    needs: validate
     name: Docker image amd64/arm64
     runs-on: ubuntu-latest
     permissions:
@@ -223,8 +232,8 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.validate.outputs.version }},enable=${{ github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate.outputs.version }},enable=${{ github.ref_type == 'tag' }}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
@@ -239,3 +248,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: [linux-amd64, linux-arm64, windows-amd64, docker]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      component: probe
+      artifact-pattern: 'cheburprobe-*'

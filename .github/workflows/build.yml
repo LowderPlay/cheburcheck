@@ -1,9 +1,9 @@
-name: Build Rust Application
+name: Build Reporter
 
 on:
   push:
     branches: [ master ]
-    tags: [ 'v*.*.*' ]
+    tags: [ 'reporter-v*.*.*' ]
   pull_request:
   workflow_dispatch:
 
@@ -11,7 +11,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    uses: ./.github/workflows/validate-release.yml
+    with:
+      component: reporter
+
   linux-amd64:
+    needs: validate
     name: Linux amd64 (.deb)
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +40,7 @@ jobs:
           compression-level: 0
 
   linux-arm64:
+    needs: validate
     name: Linux arm64 (.deb via cross)
     runs-on: ubuntu-latest
     steps:
@@ -63,6 +70,7 @@ jobs:
           path: target/aarch64-unknown-linux-gnu/debian/*.deb
 
   windows:
+    needs: validate
     name: Windows amd64
     runs-on: windows-latest
     steps:
@@ -79,3 +87,14 @@ jobs:
         with:
           name: windows-amd64-exe
           path: target/release/*.exe
+
+  release:
+    needs: [linux-amd64, linux-arm64, windows]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      component: reporter
+      artifact-pattern: '*'
