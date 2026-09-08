@@ -24,6 +24,7 @@ pub struct ProbeReporterInfo {
     pub region: Option<String>,
     pub provider: Option<String>,
     pub asn: Option<String>,
+    pub disable_traceroutes: bool,
 }
 
 #[get("/probe/<id>?<token>")]
@@ -110,12 +111,10 @@ pub async fn probe_query(
             rocket::tokio::select! {
                 result = results.recv() => {
                     match result {
-                        Ok(result) => {
+                        Ok(mut result) => {
                             if !expected_probes.contains(&result.probe_id) {
                                 continue;
                             }
-                            responded_probes.insert(result.probe_id.clone());
-                            let target_traceroute = result.target_traceroute.clone();
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
                                 Ok(info) => info,
                                 Err(error) => {
@@ -123,13 +122,19 @@ pub async fn probe_query(
                                         "api: failed to fetch reporter info for probe {}: {}",
                                         result.probe_id, error
                                     );
-                                    None
+                                    continue;
                                 }
                             };
+                            let Some(reporter_info) = reporter_info else {
+                                continue;
+                            };
+                            responded_probes.insert(result.probe_id.clone());
+                            filter_probe_traceroute(&mut result, reporter_info.disable_traceroutes);
+                            let target_traceroute = result.target_traceroute.clone();
                             let response = build_probe_response(
                                 result,
                                 &probe_config,
-                                reporter_info,
+                                Some(reporter_info),
                                 is_ip_target,
                             );
                             if let Err(error) = insert_probe_report(
@@ -195,6 +200,12 @@ async fn load_probe_targets(
             .collect();
 
     Ok((None, probe_ids))
+}
+
+fn filter_probe_traceroute(result: &mut ProbeResultEvent, disable_traceroutes: bool) {
+    if disable_traceroutes {
+        result.target_traceroute = None;
+    }
 }
 
 pub fn build_probe_response(
@@ -333,7 +344,7 @@ async fn fetch_probe_reporter_info(
     pool: &PgPool,
 ) -> Result<Option<ProbeReporterInfo>, sqlx::Error> {
     sqlx::query_as::<_, ProbeReporterInfo>(
-        "SELECT region, provider, asn FROM reporters WHERE id = $1 LIMIT 1",
+        "SELECT region, provider, asn, disable_traceroutes FROM reporters WHERE id = $1 LIMIT 1",
     )
     .bind(probe_id.parse::<i32>().unwrap_or(-1))
     .fetch_optional(pool)
@@ -495,6 +506,54 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_traceroutes_are_not_persisted_or_used_in_public_verdicts() {
+        for disabled in [false, true] {
+            for outcome in [
+                TcpTracerouteOutcome::Timeout,
+                TcpTracerouteOutcome::Connected { hop: 5 },
+            ] {
+                let mut result = ProbeResultEvent {
+                    job_id: "job".to_string(),
+                    probe_id: "42".to_string(),
+                    host_results: vec![HostProbeResult {
+                        host_id: "test".to_string(),
+                        probe_evidence: ProbeEvidence::Good,
+                    }],
+                    target_traceroute: Some(TcpTracerouteResult {
+                        target: "192.0.2.1".parse().unwrap(),
+                        result: outcome,
+                    }),
+                    dpi_hop: Some(4),
+                    dns: Some(reports::probe::DnsProbeResult {
+                        spoofing_detected: true,
+                        suspicious_provider_count: 2,
+                        verdict_threshold: 2,
+                        samples_per_protocol: 3,
+                        observations: vec![],
+                    }),
+                };
+                filter_probe_traceroute(&mut result, disabled);
+                assert_eq!(result.host_results.len(), 1);
+                assert!(result.dns.as_ref().unwrap().spoofing_detected);
+                let columns = traceroute_columns(result.target_traceroute.as_ref());
+                let response = build_probe_response(result, &empty_config(), None, true);
+                if disabled {
+                    assert_eq!(columns, (None, None));
+                    assert_eq!(response["target_hop"], Value::Null);
+                    assert_eq!(response["verdicts"], json!(["uncertain"]));
+                } else {
+                    assert!(columns.1.is_some());
+                    if columns.1 == Some("Timeout") {
+                        assert_eq!(response["verdicts"], json!(["tspu_block"]));
+                    } else {
+                        assert_eq!(response["target_hop"], json!(5));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn no_checks_returns_uncertain() {

@@ -1,0 +1,2 @@
+ALTER TABLE reporters
+    ADD COLUMN IF NOT EXISTS disable_traceroutes BOOLEAN NOT NULL DEFAULT FALSE;
