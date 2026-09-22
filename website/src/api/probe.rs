@@ -71,7 +71,11 @@ pub async fn probe_query(
     }
 
     let (target_probe, eligible_probes) = load_probe_targets(pool, token).await?;
-    let expected_probes = mqtt.online_probe_ids(&eligible_probes).await;
+    let expected_probes = if target_probe.is_some() {
+        eligible_probes
+    } else {
+        mqtt.online_probe_ids(&eligible_probes).await
+    };
     let online_probes = expected_probes.len();
     let expected_probes = expected_probes.into_iter().collect::<HashSet<_>>();
 
