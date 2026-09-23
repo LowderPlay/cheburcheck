@@ -1,51 +1,3 @@
-import { type GeoPermissibleObjects, geoConicEqualArea, geoPath } from "d3-geo";
-import boundaries from "$lib/data/russiaRegions.json";
-
-type PolygonGeometry = { type: "Polygon"; coordinates: number[][][] };
-type MultiPolygonGeometry = {
-	type: "MultiPolygon";
-	coordinates: number[][][][];
-};
-
-// D3's spherical clipping expects the opposite ring winding from GeoJSON.
-// Keep the source GeoJSON intact and reverse only the rings passed to d3-geo.
-const projectedFeatures = boundaries.features.map((feature) => {
-	const geometry = feature.geometry as PolygonGeometry | MultiPolygonGeometry;
-	return {
-		...feature,
-		geometry: {
-			...geometry,
-			coordinates:
-				geometry.type === "Polygon"
-					? geometry.coordinates.map((ring) => ring.toReversed())
-					: geometry.coordinates.map((polygon) =>
-							polygon.map((ring) => ring.toReversed()),
-						),
-		},
-	} as GeoPermissibleObjects;
-});
-const collection = {
-	type: "FeatureCollection",
-	features: projectedFeatures,
-} as GeoPermissibleObjects;
-const projection = geoConicEqualArea()
-	.parallels([40, 60])
-	.rotate([-105, 0])
-	.fitExtent(
-		[
-			[8, 8],
-			[512, 242],
-		],
-		collection,
-	);
-const path = geoPath(projection);
-
-export const russiaSubjects = boundaries.features.map((feature, index) => ({
-	id: feature.properties.id,
-	name: feature.properties.name,
-	path: path(projectedFeatures[index]) ?? "",
-}));
-
 const names: Record<string, string> = {
 	"RU-ALT": "Алтайский край",
 	"RU-MO": "Республика Мордовия",
@@ -138,32 +90,10 @@ const names: Record<string, string> = {
 	"RU-KHE": "Херсонская область",
 };
 
-const aliases: Record<string, string> = {
-	удмуртия: "RU-UD",
-	чувашия: "RU-CU",
-	якутия: "RU-SA",
-	"республика саха": "RU-SA",
-	хмао: "RU-KHM",
-	"хмао югра": "RU-KHM",
-	югра: "RU-KHM",
-	янао: "RU-YAN",
-	"кемеровская область кузбасс": "RU-KEM",
-	кузбасс: "RU-KEM",
-	"республика северная осетия алания": "RU-SE",
-	"северная осетия": "RU-SE",
-	"марий эл": "RU-ME",
-	"санкт петербург": "RU-SPE",
-	спб: "RU-SPE",
-	"город москва": "RU-MOW",
-	"г москва": "RU-MOW",
-	крым: "RU-CRI",
-	"город севастополь": "RU-SEV",
-	"г севастополь": "RU-SEV",
-	днр: "RU-DON",
-	"донецкая область": "RU-DON",
-	лнр: "RU-LUG",
-	"луганская область": "RU-LUG",
-};
+export const russiaSubjects = Object.entries(names).map(([id, name]) => ({
+	id,
+	name,
+}));
 
 function normalize(value: string) {
 	return value
@@ -174,15 +104,9 @@ function normalize(value: string) {
 		.replace(/\s+/g, " ");
 }
 
-const byName = new Map<string, string>();
-for (const subject of russiaSubjects) {
-	const russianName = names[subject.id];
-	if (russianName) byName.set(normalize(russianName), subject.id);
-	byName.set(normalize(subject.name), subject.id);
-	byName.set(normalize(subject.id), subject.id);
-}
-for (const [name, id] of Object.entries(aliases))
-	if (id) byName.set(normalize(name), id);
+const byName = new Map(
+	Object.entries(names).map(([id, name]) => [normalize(name), id]),
+);
 
 export function regionCode(name: string | null | undefined): string | null {
 	if (!name) return null;
@@ -190,7 +114,5 @@ export function regionCode(name: string | null | undefined): string | null {
 }
 
 export function subjectName(id: string): string {
-	return (
-		names[id] ?? russiaSubjects.find((subject) => subject.id === id)?.name ?? id
-	);
+	return names[id] ?? id;
 }

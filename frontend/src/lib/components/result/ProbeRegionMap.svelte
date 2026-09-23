@@ -2,6 +2,11 @@
 import { tick } from "svelte";
 import type { DisplayProbeVerdict, ProbeResult } from "$lib/api/probe";
 import {
+	regionWord,
+	respondedScanners,
+	scannerWord,
+} from "$lib/utils/russianPlural";
+import {
 	voteCount as countVotes,
 	regionName,
 	verdictOrder,
@@ -13,11 +18,13 @@ import { russiaTilePositions } from "./russiaTilePositions";
 let {
 	probes,
 	isStaticCdn,
+	highlightedVerdict,
 	selectedSubjectId,
 	onSelectRegion,
 }: {
 	probes: ProbeResult[];
 	isStaticCdn: boolean;
+	highlightedVerdict: DisplayProbeVerdict | null;
 	selectedSubjectId: string | null;
 	onSelectRegion: (id: string) => void;
 } = $props();
@@ -83,18 +90,13 @@ const regionResults = $derived.by(() => {
 });
 const visibleMapLegend = $derived.by(() => {
 	const colors = new Set(
-		russiaSubjects
-			.filter(
-				(subject) =>
-					mapView === "geographic" || russiaTilePositions[subject.id],
-			)
-			.flatMap((subject) => {
-				const members = regionResults.get(subject.id);
-				const color = regionColor(members);
-				return color === mapColors.mixed
-					? mixedRegionColors(members ?? [])
-					: [color];
-			}),
+		russiaSubjects.flatMap((subject) => {
+			const members = regionResults.get(subject.id);
+			const color = regionColor(members);
+			return color === mapColors.mixed
+				? mixedRegionColors(members ?? [])
+				: [color];
+		}),
 	);
 	return mapLegend.filter(({ color }) => colors.has(color));
 });
@@ -116,15 +118,11 @@ const unmappedRegions = $derived(
 	regions.filter((region) => !regionCode(region.name)),
 );
 let mapElement = $state<HTMLDivElement>();
-let mapView = $state<"geographic" | "tiles">("geographic");
 let activeSubjectId = $state<string | null>(null);
 let tooltipX = $state(0);
 let tooltipY = $state(0);
 const activeSubject = $derived(
 	russiaSubjects.find((subject) => subject.id === activeSubjectId),
-);
-const selectedSubject = $derived(
-	russiaSubjects.find((subject) => subject.id === selectedSubjectId),
 );
 const activeTile = $derived(
 	activeSubjectId ? russiaTilePositions[activeSubjectId] : undefined,
@@ -144,21 +142,6 @@ function positionTooltip(clientX: number, clientY: number) {
 		Math.min(bounds.width - halfWidth, clientX - bounds.left),
 	);
 	tooltipY = Math.max(80, clientY - bounds.top - 10);
-}
-
-function selectMapView(view: "geographic" | "tiles") {
-	mapView = view;
-	activeSubjectId = null;
-}
-
-function handleMapTabKeydown(event: KeyboardEvent) {
-	if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-	event.preventDefault();
-	const next = mapView === "geographic" ? "tiles" : "geographic";
-	selectMapView(next);
-	const tabId =
-		next === "geographic" ? "probe-map-geographic-tab" : "probe-map-tiles-tab";
-	document.getElementById(tabId)?.focus();
 }
 
 function showSubject(event: PointerEvent, id: string) {
@@ -202,55 +185,21 @@ function handleSubjectKeydown(event: KeyboardEvent, id: string) {
 			По регионам
 		</h4>
 		<span class="text-xs text-neutral-500"
-			>{mapView === "geographic" ? mappedRegions.length : mappedRegions.filter(({ id }) => russiaTilePositions[id]).length}
-			регионов · {probes.length} сканеров</span
+			>{mappedRegions.length}
+			{regionWord(mappedRegions.length)}
+			· {probes.length} {scannerWord(probes.length)}</span
 		>
 	</div>
 	<div
-		class="mb-3 flex gap-1 border-b border-neutral-800"
-		role="tablist"
-		aria-label="Вид карты"
-	>
-		<button
-			id="probe-map-geographic-tab"
-			type="button"
-			role="tab"
-			aria-selected={mapView === "geographic"}
-			aria-controls="probe-map-panel"
-			tabindex={mapView === "geographic" ? 0 : -1}
-			class={`border-b-2 px-3 py-1.5 text-xs font-medium ${mapView === "geographic" ? "border-primary text-neutral-100" : "border-transparent text-neutral-400 hover:text-neutral-200"}`}
-			onclick={() => selectMapView("geographic")}
-			onkeydown={handleMapTabKeydown}
-		>
-			Обычная карта
-		</button>
-		<button
-			id="probe-map-tiles-tab"
-			type="button"
-			role="tab"
-			aria-selected={mapView === "tiles"}
-			aria-controls="probe-map-panel"
-			tabindex={mapView === "tiles" ? 0 : -1}
-			class={`border-b-2 px-3 py-1.5 text-xs font-medium ${mapView === "tiles" ? "border-primary text-neutral-100" : "border-transparent text-neutral-400 hover:text-neutral-200"}`}
-			onclick={() => selectMapView("tiles")}
-			onkeydown={handleMapTabKeydown}
-		>
-			Плиточная карта
-		</button>
-	</div>
-	<div
-		id="probe-map-panel"
-		role="tabpanel"
-		aria-labelledby={mapView === "geographic" ? "probe-map-geographic-tab" : "probe-map-tiles-tab"}
 		bind:this={mapElement}
 		class="relative rounded-md border border-neutral-800 bg-neutral-950/40 px-2 py-2"
 	>
-		{#if mapView === "geographic"}
+		<div class="h-[300px] overflow-x-auto sm:h-[340px] lg:h-[360px]">
 			<svg
-				class="block h-[220px] w-full sm:h-[320px] lg:h-[340px]"
-				viewBox="0 0 520 250"
+				class="block h-full min-w-[550px] w-full"
+				viewBox="0 0 550 330"
 				role="group"
-				aria-label="Карта регионов с результатами динамической проверки"
+				aria-label="Плиточная карта регионов с результатами динамической проверки"
 			>
 				<defs>
 					{#each russiaSubjects as subject (subject.id)}
@@ -272,162 +221,84 @@ function handleSubjectKeydown(event: KeyboardEvent, id: string) {
 					{/each}
 				</defs>
 				{#each russiaSubjects as subject (subject.id)}
+					{@const tile = russiaTilePositions[subject.id]}
 					{@const members = regionResults.get(subject.id)}
-					<path
-						d={subject.path}
-						fill={regionColor(members) === mapColors.mixed ? `url(#probe-map-mixed-${subject.id})` : regionColor(members)}
-						stroke="#525252"
-						stroke-width="0.8"
-						stroke-linejoin="round"
-						class="cursor-pointer focus:outline-none"
-						role="button"
-						tabindex="0"
-						aria-label={subjectName(subject.id)}
-						aria-expanded={selectedSubjectId === subject.id}
-						aria-controls="probe-region-details"
-						aria-describedby={activeSubjectId === subject.id ? "probe-map-tooltip" : undefined}
-						onclick={() => selectSubject(subject.id)}
-						onpointerenter={(event) => showSubject(event, subject.id)}
-						onpointermove={(event) => showSubject(event, subject.id)}
-						onpointerdown={(event) => showSubject(event, subject.id)}
-						onpointerleave={(event) => { if (event.pointerType !== "touch") activeSubjectId = null; }}
-						onfocus={(event) => focusSubject(event, subject.id)}
-						onblur={() => activeSubjectId = null}
-						onkeydown={(event) => handleSubjectKeydown(event, subject.id)}
-					></path>
+					{@const color = regionColor(members)}
+					{@const isHighlighted = highlightedVerdict !== null && voteCount(members ?? [], highlightedVerdict) > 0}
+					{#if tile}
+						<g
+							transform={`translate(${tile[0] * 28 + 8} ${tile[1] * 28 + 10})`}
+							class="transition-opacity duration-150"
+							style:opacity={highlightedVerdict && !isHighlighted ? 0.2 : 1}
+							role="button"
+							tabindex="0"
+							aria-label={subjectName(subject.id)}
+							aria-expanded={selectedSubjectId === subject.id}
+							aria-controls="probe-region-details"
+							aria-describedby={activeSubjectId === subject.id ? "probe-map-tooltip" : undefined}
+							onclick={() => selectSubject(subject.id)}
+							onpointerenter={(event) => showSubject(event, subject.id)}
+							onpointermove={(event) => showSubject(event, subject.id)}
+							onpointerdown={(event) => showSubject(event, subject.id)}
+							onpointerleave={(event) => { if (event.pointerType !== "touch") activeSubjectId = null; }}
+							onfocus={(event) => focusSubject(event, subject.id)}
+							onblur={() => activeSubjectId = null}
+							onkeydown={(event) => handleSubjectKeydown(event, subject.id)}
+						>
+							<rect
+								width="27"
+								height="27"
+								rx="2"
+								fill={color === mapColors.mixed ? `url(#probe-map-mixed-${subject.id})` : color}
+								stroke={isHighlighted ? "#fafafa" : "#525252"}
+								stroke-width={isHighlighted ? 1.8 : 0.7}
+							/>
+							<text
+								x="13.5"
+								y="13.5"
+								text-anchor="middle"
+								dominant-baseline="central"
+								font-size="9.5"
+								font-weight="600"
+								fill={color === mapColors.noResults ? "#fafafa" : "#0a0a0a"}
+								class="pointer-events-none select-none"
+							>
+								{tile[2]}
+							</text>
+						</g>
+					{/if}
 				{/each}
-				{#if activeSubject}
-					<path
-						d={activeSubject.path}
+				{#if activeTile}
+					<rect
+						x={activeTile[0] * 28 + 8}
+						y={activeTile[1] * 28 + 10}
+						width="27"
+						height="27"
+						rx="2"
 						fill="none"
-						stroke="white"
-						stroke-width="1.8"
-						stroke-linejoin="round"
+						stroke="#fafafa"
+						stroke-width="1.5"
 						class="pointer-events-none"
 						aria-hidden="true"
-					></path>
+					/>
 				{/if}
-				{#if selectedSubject}
-					<path
-						d={selectedSubject.path}
+				{#if selectedTile}
+					<rect
+						opacity={highlightedVerdict && selectedSubjectId && voteCount(regionResults.get(selectedSubjectId) ?? [], highlightedVerdict) === 0 ? 0.2 : 1}
+						x={selectedTile[0] * 28 + 8}
+						y={selectedTile[1] * 28 + 10}
+						width="27"
+						height="27"
+						rx="2"
 						fill="none"
 						stroke="#fafafa"
 						stroke-width="1.8"
-						stroke-linejoin="round"
 						class="pointer-events-none"
 						aria-hidden="true"
-					></path>
+					/>
 				{/if}
 			</svg>
-		{:else}
-			<div class="h-[300px] overflow-x-auto sm:h-[340px] lg:h-[360px]">
-				<svg
-					class="block h-full min-w-[550px] w-full"
-					viewBox="0 0 550 330"
-					role="group"
-					aria-label="Плиточная карта регионов с результатами динамической проверки"
-				>
-					<defs>
-						{#each russiaSubjects as subject (subject.id)}
-							{@const members = regionResults.get(subject.id)}
-							{#if regionColor(members) === mapColors.mixed}
-								{@const colors = mixedRegionColors(members ?? [])}
-								<pattern
-									id={`probe-map-mixed-${subject.id}`}
-									patternUnits="userSpaceOnUse"
-									width={colors.length * 5}
-									height="5"
-									patternTransform="rotate(45)"
-								>
-									{#each colors as color, index}
-										<rect
-											x={index * 5}
-											y="0"
-											width="5"
-											height="5"
-											fill={color}
-										/>
-									{/each}
-								</pattern>
-							{/if}
-						{/each}
-					</defs>
-					{#each russiaSubjects as subject (subject.id)}
-						{@const tile = russiaTilePositions[subject.id]}
-						{@const members = regionResults.get(subject.id)}
-						{@const color = regionColor(members)}
-						{#if tile}
-							<g
-								transform={`translate(${tile[0] * 28 + 8} ${tile[1] * 28 + 10})`}
-								role="button"
-								tabindex="0"
-								aria-label={subjectName(subject.id)}
-								aria-expanded={selectedSubjectId === subject.id}
-								aria-controls="probe-region-details"
-								aria-describedby={activeSubjectId === subject.id ? "probe-map-tooltip" : undefined}
-								onclick={() => selectSubject(subject.id)}
-								onpointerenter={(event) => showSubject(event, subject.id)}
-								onpointermove={(event) => showSubject(event, subject.id)}
-								onpointerdown={(event) => showSubject(event, subject.id)}
-								onpointerleave={(event) => { if (event.pointerType !== "touch") activeSubjectId = null; }}
-								onfocus={(event) => focusSubject(event, subject.id)}
-								onblur={() => activeSubjectId = null}
-								onkeydown={(event) => handleSubjectKeydown(event, subject.id)}
-							>
-								<rect
-									width="27"
-									height="27"
-									rx="2"
-									fill={color === mapColors.mixed ? `url(#probe-map-mixed-${subject.id})` : color}
-									stroke="#525252"
-									stroke-width="0.7"
-								/>
-								<text
-									x="13.5"
-									y="13.5"
-									text-anchor="middle"
-									dominant-baseline="central"
-									font-size="9.5"
-									font-weight="600"
-									fill={color === mapColors.noResults ? "#fafafa" : "#0a0a0a"}
-									class="pointer-events-none select-none"
-								>
-									{tile[2]}
-								</text>
-							</g>
-						{/if}
-					{/each}
-					{#if activeTile}
-						<rect
-							x={activeTile[0] * 28 + 8}
-							y={activeTile[1] * 28 + 10}
-							width="27"
-							height="27"
-							rx="2"
-							fill="none"
-							stroke="#fafafa"
-							stroke-width="1.5"
-							class="pointer-events-none"
-							aria-hidden="true"
-						/>
-					{/if}
-					{#if selectedTile}
-						<rect
-							x={selectedTile[0] * 28 + 8}
-							y={selectedTile[1] * 28 + 10}
-							width="27"
-							height="27"
-							rx="2"
-							fill="none"
-							stroke="#fafafa"
-							stroke-width="1.8"
-							class="pointer-events-none"
-							aria-hidden="true"
-						/>
-					{/if}
-				</svg>
-			</div>
-		{/if}
+		</div>
 		{#if activeSubject}
 			<div
 				id="probe-map-tooltip"
@@ -442,7 +313,7 @@ function handleSubjectKeydown(event: KeyboardEvent, id: string) {
 				</p>
 				{#if activeMembers?.length}
 					<p class="mt-1 text-neutral-400">
-						Ответили {activeMembers.length} сканеров
+						{respondedScanners(activeMembers.length)}
 					</p>
 					<div class="mt-2 flex flex-wrap gap-x-2 gap-y-1">
 						{#each verdictOrder as verdict}
@@ -462,7 +333,7 @@ function handleSubjectKeydown(event: KeyboardEvent, id: string) {
 	</div>
 	{#if unmappedRegions.length}
 		<p class="mt-2 text-xs text-neutral-500">
-			Нет границ в наборе данных:
+			Нет плитки для регионов:
 			{unmappedRegions.map((region) => region.name).join(', ')}.
 		</p>
 	{/if}
@@ -484,18 +355,5 @@ function handleSubjectKeydown(event: KeyboardEvent, id: string) {
 	<p class="mt-2 text-[11px] text-neutral-500">
 		Наведите на регион для краткой сводки. Нажмите на него, чтобы увидеть
 		результаты всех сканеров.
-	</p>
-	<p class="mt-1 text-[10px] text-neutral-600">
-		Данные карты:
-		<a
-			class="underline hover:text-neutral-400"
-			href="https://www.geoboundaries.org/"
-			>geoBoundaries</a
-		>,
-		<a
-			class="underline hover:text-neutral-400"
-			href="https://www.openstreetmap.org/copyright"
-			>© OpenStreetMap contributors</a
-		>.
 	</p>
 </section>

@@ -1,6 +1,11 @@
 <script lang="ts">
 import { Activity, LoaderCircle } from "@lucide/svelte";
-import type { ProbeResult, ProbeStatus } from "$lib/api/probe";
+import type {
+	DisplayProbeVerdict,
+	ProbeResult,
+	ProbeStatus,
+} from "$lib/api/probe";
+import { scannerWord } from "$lib/utils/russianPlural";
 import ProbeDns from "./ProbeDns.svelte";
 import ProbeHosts from "./ProbeHosts.svelte";
 import ProbeRegionDetails from "./ProbeRegionDetails.svelte";
@@ -19,6 +24,7 @@ let {
 } = $props();
 
 let selectedRegionId = $state<string | null>(null);
+let highlightedVerdict = $state<DisplayProbeVerdict | null>(null);
 const selectedRegionProbes = $derived(
 	selectedRegionId
 		? probes.filter((probe) => regionCode(probe.region) === selectedRegionId)
@@ -38,16 +44,12 @@ const selectedRegionProbes = $derived(
 				>Результаты динамической проверки</a
 			>
 		</h3>
-		<div class="text-xs text-neutral-400 flex items-center gap-3">
-			<div class="flex items-center gap-1">
-				<span
-					class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
-				></span>
-				Сканеров онлайн: {status.online_probes}
-			</div>
-			<div class="flex items-center gap-1">
-				Получено ответов: {probes.length} / {status.online_probes}
-			</div>
+		<div class="text-xs text-neutral-400 flex items-center gap-2">
+			<span
+				class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
+			></span>
+			{status.online_probes} {scannerWord(status.online_probes)} в сети,
+			получено {probes.length} из {status.online_probes} ответов
 		</div>
 	</div>
 	{#if status.online_probes > 0 && probes.length < status.online_probes && status.status !== "done" && status.status !== "error"}
@@ -85,12 +87,17 @@ const selectedRegionProbes = $derived(
 			<div
 				class="contents lg:col-start-2 lg:row-start-1 lg:block lg:min-w-0 lg:space-y-5"
 			>
-				<ProbeVerdictSummary {probes} {isStaticCdn} />
+				<ProbeVerdictSummary
+					{probes}
+					{isStaticCdn}
+					onHighlightVerdict={(verdict) => (highlightedVerdict = verdict)}
+				/>
 				<ProbeHosts {probes} />
 			</div>
 			<ProbeRegionMap
 				{probes}
 				{isStaticCdn}
+				{highlightedVerdict}
 				selectedSubjectId={selectedRegionId}
 				onSelectRegion={(id) => (selectedRegionId = id)}
 			/>

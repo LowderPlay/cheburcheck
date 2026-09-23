@@ -6,8 +6,15 @@ import {
 	verdicts,
 } from "./probePresentation";
 
-let { probes, isStaticCdn }: { probes: ProbeResult[]; isStaticCdn: boolean } =
-	$props();
+let {
+	probes,
+	isStaticCdn,
+	onHighlightVerdict,
+}: {
+	probes: ProbeResult[];
+	isStaticCdn: boolean;
+	onHighlightVerdict: (verdict: DisplayProbeVerdict | null) => void;
+} = $props();
 const voteCount = (members: ProbeResult[], verdict: DisplayProbeVerdict) =>
 	countVotes(members, verdict, isStaticCdn);
 </script>
@@ -30,6 +37,10 @@ const voteCount = (members: ProbeResult[], verdict: DisplayProbeVerdict) =>
 				<a
 					href={verdict === "whitelist" ? "/kb/whitelist" : "/kb/probing#что-показывает-результат"}
 					class="group block rounded-md border border-neutral-800 bg-neutral-950/40 p-3 transition-colors hover:border-neutral-600 hover:bg-neutral-900/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+					onpointerenter={() => onHighlightVerdict(verdict)}
+					onpointerleave={() => onHighlightVerdict(null)}
+					onfocus={() => onHighlightVerdict(verdict)}
+					onblur={() => onHighlightVerdict(null)}
 				>
 					<div class="flex items-center justify-between gap-2 text-sm">
 						<span

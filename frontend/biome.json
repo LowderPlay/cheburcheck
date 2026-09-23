@@ -1,6 +1,0 @@
-{
-	"extends": "//",
-	"files": {
-		"includes": ["**", "!!src/lib/data/russiaRegions.json"]
-	}
-}

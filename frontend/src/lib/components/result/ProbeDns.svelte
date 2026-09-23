@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { DnsObservation, ProbeResult } from "$lib/api/probe";
+import { scannersAfterIzWord, scannerWord } from "$lib/utils/russianPlural";
 
 let { probes }: { probes: ProbeResult[] } = $props();
 type DnsEntry = { probe: ProbeResult; observation: DnsObservation };
@@ -51,7 +52,7 @@ const dnsConfirmed = $derived(
 			<span class="text-xs text-neutral-500"
 				>Подмена подтверждена у
 				{dnsConfirmed}
-				из {dnsScanned} сканеров</span
+				из {dnsScanned} {scannersAfterIzWord(dnsScanned)}</span
 			>
 		</div>
 		<div class="overflow-x-auto">
@@ -66,6 +67,7 @@ const dnsConfirmed = $derived(
 				</thead>
 				<tbody>
 					{#each dnsProviders as provider (provider.name)}
+						{@const providerScannerCount = new Set(provider.entries.map(({ probe }) => probe.probe_id)).size}
 						<tr class="border-b border-neutral-800/60">
 							<th
 								scope="row"
@@ -74,8 +76,8 @@ const dnsConfirmed = $derived(
 								{provider.name}
 								<span class="ml-1 font-normal text-neutral-500"
 									>·
-									{new Set(provider.entries.map(({ probe }) => probe.probe_id)).size}
-									сканеров</span
+									{providerScannerCount}
+									{scannerWord(providerScannerCount)}</span
 								>
 							</th>
 							{#each protocols as protocol}

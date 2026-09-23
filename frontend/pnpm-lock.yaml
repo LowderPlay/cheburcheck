@@ -14,16 +14,10 @@ importers:
       '@tanstack/svelte-query':
         specifier: ^6.1.33
         version: 6.1.33(svelte@5.55.10)
-      d3-geo:
-        specifier: 3.1.1
-        version: 3.1.1
       layerchart:
         specifier: 2.0.0-next.64
         version: 2.0.0-next.64(@sveltejs/kit@2.61.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.10)(vite@8.0.14(@types/node@25.9.1)(jiti@2.7.0)))(svelte@5.55.10)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(jiti@2.7.0)))(svelte@5.55.10)
     devDependencies:
-      '@types/d3-geo':
-        specifier: 3.0.6
-        version: 3.0.6
       '@biomejs/biome':
         specifier: 2.4.15
         version: 2.4.15
@@ -607,9 +601,6 @@ packages:
 
   '@types/d3-contour@3.0.6':
     resolution: {integrity: sha512-BjzLgXGnCWjUSYGfH1cpdo41/hgdWETu4YxpezoztawmqsvCeep+8QGfiY6YbDvfgHz/DkjeIkkZVJavB4a3rg==}
-
-  '@types/d3-geo@3.0.6':
-    resolution: {integrity: sha512-wblAES3b+C3hvp4VakwECEKtHquT/xc6K4HOna95LM1j1fd7s7WmU4V+JMQZfKhNCMkV2vWD+ZUgY2Uj6gqfuA==}
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
@@ -1568,10 +1559,6 @@ snapshots:
   '@types/d3-contour@3.0.6':
     dependencies:
       '@types/d3-array': 3.2.2
-      '@types/geojson': 7946.0.16
-
-  '@types/d3-geo@3.0.6':
-    dependencies:
       '@types/geojson': 7946.0.16
 
   '@types/estree@1.0.8': {}

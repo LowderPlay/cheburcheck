@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { ProbeHostResult, ProbeResult } from "$lib/api/probe";
+import { respondedScanners } from "$lib/utils/russianPlural";
 
 let { probes }: { probes: ProbeResult[] } = $props();
 
@@ -227,6 +228,7 @@ function focusHost(event: Event, key: string) {
 			</div>
 		</div>
 		{#if activeHost}
+			{@const activeScannerCount = new Set(activeHost.results.map(({ probe }) => probe.probe_id)).size}
 			<div
 				id="probe-host-tooltip"
 				class="pointer-events-none absolute z-10 w-64 rounded-md border border-neutral-600 bg-neutral-950/95 p-3 text-xs shadow-xl"
@@ -240,9 +242,7 @@ function focusHost(event: Event, key: string) {
 				</p>
 				<p class="mt-1 text-neutral-400">
 					{activeHost.category === "Blacklist" ? "Заблокированный диапазон" : "Доступный диапазон"}
-					· Ответили
-					{new Set(activeHost.results.map(({ probe }) => probe.probe_id)).size}
-					сканеров
+					· {respondedScanners(activeScannerCount)}
 				</p>
 				<div class="mt-2 space-y-1">
 					{#each hostEvidence as item (item.type)}

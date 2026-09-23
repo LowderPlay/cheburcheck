@@ -13,6 +13,7 @@ import {
 	displayProbeVerdicts,
 	type ProbeResult,
 } from "$lib/api/probe";
+import { respondedScanners } from "$lib/utils/russianPlural";
 
 let {
 	name,
@@ -131,7 +132,7 @@ const verdictStyles = {
 				{name}
 			</h4>
 			<p class="mt-1 text-xs text-neutral-400">
-				Ответили {probes.length} сканеров
+				{respondedScanners(probes.length)}
 			</p>
 		</div>
 		<button
