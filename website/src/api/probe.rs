@@ -18,6 +18,7 @@ use sqlx::types::Uuid;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(sqlx::FromRow)]
 pub struct ProbeReporterInfo {
@@ -85,6 +86,7 @@ pub async fn probe_query(
         publish_error_status(error)
     })?;
 
+    let published_at = Instant::now();
     mqtt.publish_probe_task(id, domain, ip, target_probe.as_deref())
         .await
         .map_err(|error| {
@@ -120,6 +122,8 @@ pub async fn probe_query(
                             if !expected_probes.contains(&result.probe_id) {
                                 continue;
                             }
+                            let duration_ms = u64::try_from(published_at.elapsed().as_millis())
+                                .unwrap_or(u64::MAX);
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
                                 Ok(info) => info,
                                 Err(error) => {
@@ -146,6 +150,7 @@ pub async fn probe_query(
                                 query_id,
                                 &response,
                                 target_traceroute.as_ref(),
+                                duration_ms,
                                 &pool,
                             ).await {
                                 warn!("api: failed to save probe report for query {id}: {error}");
@@ -278,6 +283,7 @@ async fn insert_probe_report(
     query_id: Uuid,
     response: &Value,
     target_traceroute: Option<&TcpTracerouteResult>,
+    duration_ms: u64,
     pool: &PgPool,
 ) -> Result<(), sqlx::Error> {
     let probe_id = response
@@ -295,6 +301,7 @@ async fn insert_probe_report(
         })
         .unwrap_or_else(|| vec!["uncertain"]);
     let (target_hop_count, target_trace_result) = traceroute_columns(target_traceroute);
+    let duration_ms = i64::try_from(duration_ms).unwrap_or(i64::MAX);
 
     let Some(probe_id) = probe_id else {
         warn!("api: ignoring probe report with non-numeric probe_id");
@@ -309,16 +316,18 @@ async fn insert_probe_report(
             verdicts,
             result,
             target_hop_count,
-            target_trace_result
+            target_trace_result,
+            duration_ms
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (query_id, probe_id)
         DO UPDATE SET
             date = NOW(),
             verdicts = EXCLUDED.verdicts,
             result = EXCLUDED.result,
             target_hop_count = EXCLUDED.target_hop_count,
-            target_trace_result = EXCLUDED.target_trace_result
+            target_trace_result = EXCLUDED.target_trace_result,
+            duration_ms = EXCLUDED.duration_ms
         "#,
     )
     .bind(query_id)
@@ -327,6 +336,7 @@ async fn insert_probe_report(
     .bind(response)
     .bind(target_hop_count)
     .bind(target_trace_result)
+    .bind(duration_ms)
     .execute(pool)
     .await?;
 
@@ -563,6 +573,7 @@ mod tests {
                 assert!(result.dns.as_ref().unwrap().spoofing_detected);
                 let columns = traceroute_columns(result.target_traceroute.as_ref());
                 let response = build_probe_response(result, &empty_config(), None, true);
+                assert!(response.get("duration_ms").is_none());
                 if disabled {
                     assert_eq!(columns, (None, None));
                     assert_eq!(response["target_hop"], Value::Null);
