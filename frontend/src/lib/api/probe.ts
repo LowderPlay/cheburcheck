@@ -44,6 +44,7 @@ export type ProbeResult = {
 	provider?: string | null;
 	asn?: string | null;
 	verdicts: ProbeVerdict[];
+	cdn_unblocked?: boolean;
 	host_results: ProbeHostResult[] | null;
 	target_hop: number | null;
 	dpi_hop: number | null;
@@ -61,7 +62,10 @@ export function displayProbeVerdicts(
 	isStaticCdn: boolean,
 ): DisplayProbeVerdict[] {
 	return probe.verdicts.map((verdict) =>
-		isStaticCdn && probe.host_results?.length !== 0 && verdict === "ok"
+		isStaticCdn &&
+		!probe.cdn_unblocked &&
+		probe.host_results?.length !== 0 &&
+		verdict === "ok"
 			? "cdn_block"
 			: verdict,
 	);

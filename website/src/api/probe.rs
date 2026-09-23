@@ -25,6 +25,7 @@ pub struct ProbeReporterInfo {
     pub provider: Option<String>,
     pub asn: Option<String>,
     pub disable_traceroutes: bool,
+    pub cdn_unblocked: bool,
 }
 
 #[get("/probe/<id>?<token>")]
@@ -226,6 +227,9 @@ pub fn build_probe_response(
         raw.dpi_hop,
         raw.dns.as_ref(),
         is_ip_target,
+        reporter_info
+            .as_ref()
+            .is_some_and(|info| info.cdn_unblocked),
     );
     let target_hop =
         raw.target_traceroute
@@ -261,6 +265,7 @@ pub fn build_probe_response(
         "region": region,
         "provider": provider,
         "asn": asn,
+        "cdn_unblocked": reporter_info.as_ref().is_some_and(|info| info.cdn_unblocked),
         "verdicts": verdicts,
         "host_results": host_results,
         "target_hop": target_hop,
@@ -348,7 +353,7 @@ async fn fetch_probe_reporter_info(
     pool: &PgPool,
 ) -> Result<Option<ProbeReporterInfo>, sqlx::Error> {
     sqlx::query_as::<_, ProbeReporterInfo>(
-        "SELECT region, provider, asn, disable_traceroutes FROM reporters WHERE id = $1 LIMIT 1",
+        "SELECT region, provider, asn, disable_traceroutes, cdn_unblocked FROM reporters WHERE id = $1 LIMIT 1",
     )
     .bind(probe_id.parse::<i32>().unwrap_or(-1))
     .fetch_optional(pool)
@@ -362,6 +367,7 @@ fn build_probe_verdicts(
     dpi_hop: Option<u8>,
     dns: Option<&reports::probe::DnsProbeResult>,
     is_ip_target: bool,
+    cdn_unblocked: bool,
 ) -> Vec<&'static str> {
     if results.is_empty() && target_traceroute.is_none() && dns.is_none() {
         return vec!["uncertain"];
@@ -371,17 +377,19 @@ fn build_probe_verdicts(
         && target_traceroute
             .is_some_and(|traceroute| matches!(&traceroute.result, TcpTracerouteOutcome::Timeout));
 
-    // IP tasks do not run the SNI/CDN host checks. A reachable IP therefore does not prove that
-    // a statically listed CDN address is unblocked.
     if is_ip_target {
         return if tspu_block {
             vec!["tspu_block"]
+        } else if target_traceroute
+            .is_some_and(|traceroute| !matches!(&traceroute.result, TcpTracerouteOutcome::Timeout))
+        {
+            vec!["ok"]
         } else {
             vec!["uncertain"]
         };
     }
 
-    let host_verdict = build_host_verdict(results, config);
+    let host_verdict = build_host_verdict(results, config, cdn_unblocked);
     let dns_spoofing = dns.is_some_and(|result| result.spoofing_detected);
 
     let mut verdicts = [
@@ -400,7 +408,11 @@ fn build_probe_verdicts(
     verdicts
 }
 
-fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'static str {
+fn build_host_verdict(
+    results: &[HostProbeResult],
+    config: &ProbeConfig,
+    cdn_unblocked: bool,
+) -> &'static str {
     let matched = results
         .iter()
         .filter_map(|result| {
@@ -430,19 +442,21 @@ fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'st
             .count(),
     ) {
         "sni_block"
-    } else if is_strict_majority(
-        matched
-            .iter()
-            .filter(|(h, _)| matches!(h.host_type, HostType::Blacklist))
-            .count(),
-        matched
-            .iter()
-            .filter(|(host, evidence)| {
-                matches!(host.host_type, HostType::Blacklist)
-                    && !matches!(evidence, ProbeEvidence::DataTimeout { .. })
-            })
-            .count(),
-    ) {
+    } else if !cdn_unblocked
+        && is_strict_majority(
+            matched
+                .iter()
+                .filter(|(h, _)| matches!(h.host_type, HostType::Blacklist))
+                .count(),
+            matched
+                .iter()
+                .filter(|(host, evidence)| {
+                    matches!(host.host_type, HostType::Blacklist)
+                        && !matches!(evidence, ProbeEvidence::DataTimeout { .. })
+                })
+                .count(),
+        )
+    {
         "whitelist"
     } else {
         let blacklist = matched
@@ -454,12 +468,18 @@ fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'st
             .filter(|(host, _)| matches!(host.host_type, HostType::Whitelist))
             .collect::<Vec<_>>();
 
-        let most_blacklist_timed_out = !blacklist.is_empty()
+        let most_blacklist_matches_baseline = !blacklist.is_empty()
             && is_strict_majority(
                 blacklist.len(),
                 blacklist
                     .iter()
-                    .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::DataTimeout { .. }))
+                    .filter(|(_, evidence)| {
+                        if cdn_unblocked {
+                            matches!(evidence, ProbeEvidence::Good)
+                        } else {
+                            matches!(evidence, ProbeEvidence::DataTimeout { .. })
+                        }
+                    })
                     .count(),
             );
         let most_whitelist_good = !whitelist.is_empty()
@@ -471,7 +491,7 @@ fn build_host_verdict(results: &[HostProbeResult], config: &ProbeConfig) -> &'st
                     .count(),
             );
 
-        if most_blacklist_timed_out && most_whitelist_good {
+        if most_blacklist_matches_baseline && most_whitelist_good {
             "ok"
         } else {
             "uncertain"
@@ -562,7 +582,7 @@ mod tests {
     #[test]
     fn no_checks_returns_uncertain() {
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), None, None, None, false),
+            build_probe_verdicts(&[], &empty_config(), None, None, None, false, false),
             vec!["uncertain"]
         );
     }
@@ -574,17 +594,33 @@ mod tests {
             result: TcpTracerouteOutcome::Timeout,
         };
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&timeout), Some(4), None, true),
+            build_probe_verdicts(
+                &[],
+                &empty_config(),
+                Some(&timeout),
+                Some(4),
+                None,
+                true,
+                false
+            ),
             vec!["tspu_block"]
         );
         assert_eq!(
-            build_probe_verdicts(&[], &empty_config(), Some(&timeout), None, None, true),
+            build_probe_verdicts(
+                &[],
+                &empty_config(),
+                Some(&timeout),
+                None,
+                None,
+                true,
+                false
+            ),
             vec!["uncertain"]
         );
     }
 
     #[test]
-    fn reachable_ip_target_is_uncertain() {
+    fn reachable_ip_target_is_ok() {
         for result in [
             TcpTracerouteOutcome::IcmpTimeExceeded { hop: 5 },
             TcpTracerouteOutcome::Connected { hop: 5 },
@@ -595,8 +631,16 @@ mod tests {
                 result,
             };
             assert_eq!(
-                build_probe_verdicts(&[], &empty_config(), Some(&target), Some(4), None, true),
-                vec!["uncertain"]
+                build_probe_verdicts(
+                    &[],
+                    &empty_config(),
+                    Some(&target),
+                    Some(4),
+                    None,
+                    true,
+                    false
+                ),
+                vec!["ok"]
             );
         }
     }
@@ -625,7 +669,7 @@ mod tests {
         };
 
         assert_eq!(
-            build_probe_verdicts(&results, &config, None, None, Some(&dns), false),
+            build_probe_verdicts(&results, &config, None, None, Some(&dns), false, false),
             vec!["sni_block", "dns_spoofing"]
         );
     }
@@ -647,8 +691,86 @@ mod tests {
         }];
 
         assert_eq!(
-            build_probe_verdicts(&results, &config, None, None, None, false),
+            build_probe_verdicts(&results, &config, None, None, None, false, false),
             vec!["whitelist"]
+        );
+    }
+
+    #[test]
+    fn accessible_cdn_is_not_a_whitelist_exception_for_unblocked_reporter() {
+        let mut config = empty_config();
+        for (id, host_type) in [
+            ("foreign-cdn", HostType::Blacklist),
+            ("control", HostType::Whitelist),
+        ] {
+            config.hosts.push(Host {
+                id: id.to_string(),
+                host: "192.0.2.1".to_string(),
+                host_type,
+                file_path: String::new(),
+                timeout_sec: 1,
+                min_data: 1,
+            });
+        }
+        let results = ["foreign-cdn", "control"]
+            .into_iter()
+            .map(|host_id| HostProbeResult {
+                host_id: host_id.to_string(),
+                probe_evidence: ProbeEvidence::Good,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false, false),
+            vec!["whitelist"]
+        );
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false, true),
+            vec!["ok"]
+        );
+
+        let response = build_probe_response(
+            ProbeResultEvent {
+                job_id: "job".to_string(),
+                probe_id: "42".to_string(),
+                host_results: results,
+                target_traceroute: None,
+                dpi_hop: None,
+                dns: None,
+            },
+            &config,
+            Some(ProbeReporterInfo {
+                region: None,
+                provider: None,
+                asn: None,
+                disable_traceroutes: false,
+                cdn_unblocked: true,
+            }),
+            false,
+        );
+        assert_eq!(response["cdn_unblocked"], json!(true));
+        assert_eq!(response["verdicts"], json!(["ok"]));
+    }
+
+    #[test]
+    fn unblocked_reporter_still_detects_sni_block() {
+        let mut config = empty_config();
+        config.hosts.push(Host {
+            id: "control".to_string(),
+            host: "192.0.2.1".to_string(),
+            host_type: HostType::Whitelist,
+            file_path: String::new(),
+            timeout_sec: 1,
+            min_data: 1,
+        });
+        let results = vec![HostProbeResult {
+            host_id: "control".to_string(),
+            probe_evidence: ProbeEvidence::ClientHello,
+        }];
+
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false, true),
+            vec!["sni_block"]
         );
     }
 
