@@ -7,7 +7,10 @@ mod update;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use log::{debug, error, info, warn};
-use reports::probe::{DpiProbeConfig, ProbeConfig, ProbeResult, ProbeStatus, ProbeTask};
+use reports::probe::{
+    DpiProbeConfig, ProbeCommand, ProbeCommandResult, ProbeConfig, ProbeResult, ProbeStatus,
+    ProbeTask,
+};
 use rumqttc::{
     AsyncClient, Event, Incoming, LastWill, MqttOptions, NetworkOptions, QoS, Transport,
 };
@@ -19,6 +22,7 @@ use tokio::sync::RwLock;
 
 const CONFIG_TOPIC: &str = "probe/config/v1";
 const UPDATE_TOPIC: &str = "probe/update/v1";
+const PUBLIC_TASK_TOPIC: &str = "probe/tasks/v1/+";
 const UPDATE_REQUEST_COMMAND: &str = "/usr/libexec/cheburprobe-request-update";
 const MQTT_MAX_PACKET_SIZE: usize = 1024 * 1024;
 
@@ -162,14 +166,9 @@ async fn main() -> Result<()> {
     } else {
         debug!("MQTT-triggered updates are disabled for this standalone installation");
     }
+    subscribe_to_tasks(&client, &args.probe_id).await?;
     client
-        .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
-        .await?;
-    client
-        .subscribe(
-            format!("probe/tasks/v1/{}/+", args.probe_id),
-            QoS::AtLeastOnce,
-        )
+        .subscribe(command_subscription(&args.probe_id), QoS::AtLeastOnce)
         .await?;
 
     info!(
@@ -194,7 +193,65 @@ async fn main() -> Result<()> {
                         config.clone(),
                         publish.payload.to_vec(),
                     );
-                } else {
+                } else if let Some(command_id) = command_id(&publish.topic, &args.probe_id) {
+                    if publish.retain {
+                        warn!("ignoring retained command on {}", publish.topic);
+                        continue;
+                    }
+                    let command_id = command_id.to_owned();
+                    let client = client.clone();
+                    let probe_id = args.probe_id.clone();
+                    let payload = publish.payload.to_vec();
+                    let retries = args.traceroute_retries;
+                    let semaphore = task_semaphore.clone();
+                    tokio::spawn(async move {
+                        let result = match serde_json::from_slice::<ProbeCommand>(&payload) {
+                            Ok(ProbeCommand::ResubscribeTasks) => {
+                                match resubscribe_to_tasks(&client).await {
+                                    Ok(()) => {
+                                        ProbeCommandResult::ResubscribeTasks { requested: true }
+                                    }
+                                    Err(error) => ProbeCommandResult::Error {
+                                        message: error.to_string(),
+                                    },
+                                }
+                            }
+                            Ok(ProbeCommand::Traceroute { target, max_hops }) => {
+                                match semaphore.acquire_owned().await {
+                                    Ok(_permit) => match traceroute::manual_traceroute(
+                                        target, max_hops, retries,
+                                    )
+                                    .await
+                                    {
+                                        Ok(hops) => ProbeCommandResult::Traceroute { target, hops },
+                                        Err(error) => ProbeCommandResult::Error {
+                                            message: error.to_string(),
+                                        },
+                                    },
+                                    Err(error) => ProbeCommandResult::Error {
+                                        message: error.to_string(),
+                                    },
+                                }
+                            }
+                            Err(error) => ProbeCommandResult::Error {
+                                message: format!("invalid command: {error}"),
+                            },
+                        };
+                        let result_topic =
+                            format!("probe/command-results/v1/{probe_id}/{command_id}");
+                        if let Err(error) = client
+                            .publish(
+                                result_topic,
+                                QoS::AtLeastOnce,
+                                false,
+                                serde_json::to_vec(&result).expect("serialize command result"),
+                            )
+                            .await
+                        {
+                            warn!("failed to publish command result: {error}");
+                        }
+                    });
+                } else if probe_task_job_id(&publish.topic).is_some() {
                     let client = client.clone();
                     let args = args.clone();
                     let config = config.clone();
@@ -249,19 +306,47 @@ async fn main() -> Result<()> {
                 if mqtt_updates_enabled {
                     subscribe_to_update_requests(&client, &args.probe_id).await?;
                 }
+                subscribe_to_tasks(&client, &args.probe_id).await?;
                 client
-                    .subscribe("probe/tasks/v1/+", QoS::AtLeastOnce)
-                    .await?;
-                client
-                    .subscribe(
-                        format!("probe/tasks/v1/{}/+", args.probe_id),
-                        QoS::AtLeastOnce,
-                    )
+                    .subscribe(command_subscription(&args.probe_id), QoS::AtLeastOnce)
                     .await?;
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
+}
+
+fn command_subscription(probe_id: &str) -> String {
+    format!("probe/commands/v1/{probe_id}/+")
+}
+
+fn command_id<'a>(topic: &'a str, probe_id: &str) -> Option<&'a str> {
+    match topic.split('/').collect::<Vec<_>>().as_slice() {
+        ["probe", "commands", "v1", recipient, command_id]
+            if *recipient == probe_id && !command_id.is_empty() =>
+        {
+            Some(command_id)
+        }
+        _ => None,
+    }
+}
+
+async fn subscribe_to_tasks(client: &AsyncClient, probe_id: &str) -> Result<()> {
+    client
+        .subscribe(PUBLIC_TASK_TOPIC, QoS::AtLeastOnce)
+        .await?;
+    client
+        .subscribe(format!("probe/tasks/v1/{probe_id}/+"), QoS::AtLeastOnce)
+        .await?;
+    Ok(())
+}
+
+async fn resubscribe_to_tasks(client: &AsyncClient) -> Result<()> {
+    client.unsubscribe(PUBLIC_TASK_TOPIC).await?;
+    client
+        .subscribe(PUBLIC_TASK_TOPIC, QoS::AtLeastOnce)
+        .await?;
+    Ok(())
 }
 
 fn spawn_config_update(
@@ -597,6 +682,30 @@ mod tests {
         assert!(is_update_topic("probe/update/v1/42", "42"));
         assert!(!is_update_topic("probe/update/v1/7", "42"));
         assert!(!is_update_topic("probe/update/v1/42/extra", "42"));
+    }
+
+    #[test]
+    fn command_topics_are_node_scoped() {
+        assert_eq!(command_subscription("42"), "probe/commands/v1/42/+");
+        assert_eq!(
+            command_id("probe/commands/v1/42/trace-1", "42"),
+            Some("trace-1")
+        );
+        assert_eq!(command_id("probe/commands/v1/7/trace-1", "42"), None);
+        assert_eq!(command_id("probe/commands/v1/42/trace-1/extra", "42"), None);
+    }
+
+    #[test]
+    fn manual_commands_decode() {
+        let command: ProbeCommand =
+            serde_json::from_str(r#"{"type":"traceroute","target":"1.1.1.1"}"#).unwrap();
+        assert!(matches!(
+            command,
+            ProbeCommand::Traceroute { max_hops: 30, .. }
+        ));
+        let command: ProbeCommand =
+            serde_json::from_str(r#"{"type":"resubscribe_tasks"}"#).unwrap();
+        assert!(matches!(command, ProbeCommand::ResubscribeTasks));
     }
 
     #[test]

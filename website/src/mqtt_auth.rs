@@ -123,6 +123,7 @@ async fn can_probe_subscribe(client_id: &str, topic: &str, pool: &PgPool) -> boo
     if topic == "probe/config/v1"
         || topic == "probe/update/v1"
         || topic == format!("probe/update/v1/{client_id}")
+        || topic == format!("probe/commands/v1/{client_id}/+")
         || is_own_task_subscription(client_id, topic)
     {
         return true;
@@ -155,6 +156,11 @@ fn can_probe_publish(client_id: &str, topic: &str) -> bool {
     let status_topic = format!("probe/status/v1/{client_id}");
     if topic == status_topic {
         return true;
+    }
+
+    if let Some(command_id) = topic.strip_prefix(&format!("probe/command-results/v1/{client_id}/"))
+    {
+        return !command_id.is_empty() && !command_id.contains('/');
     }
 
     let mut parts = topic.split('/');
@@ -192,11 +198,19 @@ mod tests {
         assert!(can_probe_subscribe("42", "probe/update/v1", &pool).await);
         assert!(can_probe_subscribe("42", "probe/update/v1/42", &pool).await);
         assert!(!can_probe_subscribe("42", "probe/update/v1/7", &pool).await);
+        assert!(can_probe_subscribe("42", "probe/commands/v1/42/+", &pool).await);
+        assert!(!can_probe_subscribe("42", "probe/commands/v1/7/+", &pool).await);
     }
 
     #[test]
     fn results_can_only_be_published_as_the_authenticated_node() {
         assert!(can_probe_publish("42", "probe/results/v1/job/42"));
         assert!(!can_probe_publish("42", "probe/results/v1/job/7"));
+        assert!(can_probe_publish("42", "probe/command-results/v1/42/job"));
+        assert!(!can_probe_publish("42", "probe/command-results/v1/7/job"));
+        assert!(!can_probe_publish(
+            "42",
+            "probe/command-results/v1/42/job/extra"
+        ));
     }
 }

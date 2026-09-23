@@ -153,6 +153,53 @@ pub struct TcpTracerouteResult {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProbeCommand {
+    Traceroute {
+        target: IpAddr,
+        #[serde(default = "default_manual_max_hops")]
+        max_hops: u8,
+    },
+    ResubscribeTasks,
+}
+
+pub const fn default_manual_max_hops() -> u8 {
+    30
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProbeCommandResult {
+    Traceroute {
+        target: IpAddr,
+        hops: Vec<ManualTracerouteHop>,
+    },
+    ResubscribeTasks {
+        requested: bool,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ManualTracerouteHop {
+    pub ttl: u8,
+    pub address: Option<IpAddr>,
+    pub reverse_names: Vec<String>,
+    pub outcome: ManualTracerouteOutcome,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualTracerouteOutcome {
+    IcmpTimeExceeded,
+    Rst,
+    Connected,
+    Timeout,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TcpTracerouteOutcome {
     Rst { hop: u8 },

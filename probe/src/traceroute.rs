@@ -2,15 +2,140 @@ use etherparse::{
     Icmpv4Type, Icmpv6Slice, Icmpv6Type, IpNumber, LaxNetSlice, LaxSlicedPacket, TransportSlice,
     icmpv4, icmpv6,
 };
+use hickory_resolver::proto::rr::RData;
 use polling::{Event, Events, Poller};
-use reports::probe::{TcpTracerouteOutcome, TcpTracerouteResult};
+use reports::probe::{
+    ManualTracerouteHop, ManualTracerouteOutcome, TcpTracerouteOutcome, TcpTracerouteResult,
+};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-use std::io::{self, Read};
+use std::io;
+use std::mem::MaybeUninit;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 const HTTPS_PORT: u16 = 443;
 const HOP_TIMEOUT: Duration = Duration::from_secs(1);
+
+pub async fn manual_traceroute(
+    target: IpAddr,
+    max_hops: u8,
+    retries: u8,
+) -> io::Result<Vec<ManualTracerouteHop>> {
+    let mut hops =
+        tokio::task::spawn_blocking(move || trace_all_blocking(target, max_hops, retries))
+            .await
+            .map_err(io::Error::other)??;
+    let resolver =
+        match hickory_resolver::Resolver::builder_tokio().and_then(|builder| builder.build()) {
+            Ok(resolver) => resolver,
+            Err(error) => {
+                log::warn!("reverse DNS resolver unavailable: {error}");
+                return Ok(hops);
+            }
+        };
+    let names = futures::future::join_all(hops.iter().map(|hop| async {
+        let Some(address) = hop.address else {
+            return Vec::new();
+        };
+        match tokio::time::timeout(Duration::from_secs(3), resolver.reverse_lookup(address)).await {
+            Ok(Ok(names)) => names
+                .answers()
+                .iter()
+                .filter_map(|record| match &record.data {
+                    RData::PTR(name) => Some(name.to_string().trim_end_matches('.').to_string()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }))
+    .await;
+    for (hop, names) in hops.iter_mut().zip(names) {
+        hop.reverse_names = names;
+    }
+    Ok(hops)
+}
+
+fn trace_all_blocking(
+    target: IpAddr,
+    max_hops: u8,
+    retries: u8,
+) -> io::Result<Vec<ManualTracerouteHop>> {
+    if max_hops == 0 || max_hops > 64 || retries == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "max_hops must be 1..=64 and retries must be nonzero",
+        ));
+    }
+    let (domain, protocol) = match target {
+        IpAddr::V4(_) => (Domain::IPV4, Protocol::ICMPV4),
+        IpAddr::V6(_) => (Domain::IPV6, Protocol::ICMPV6),
+    };
+    let receiver = Socket::new(domain, Type::RAW, Some(protocol))?;
+    let mut hops = Vec::new();
+    for ttl in 1..=max_hops {
+        let attempts = connect_attempts(target, ttl, retries)?;
+        let response = if attempts.is_empty() {
+            HopResponse::Timeout
+        } else {
+            wait_for_hop_response(&receiver, &attempts, target)?
+        };
+        let (address, outcome, complete) = match response {
+            HopResponse::IcmpTimeExceeded(address) => (
+                Some(address),
+                ManualTracerouteOutcome::IcmpTimeExceeded,
+                false,
+            ),
+            HopResponse::Rst => (Some(target), ManualTracerouteOutcome::Rst, true),
+            HopResponse::Connected => (Some(target), ManualTracerouteOutcome::Connected, true),
+            HopResponse::Timeout => (None, ManualTracerouteOutcome::Timeout, false),
+        };
+        hops.push(ManualTracerouteHop {
+            ttl,
+            address,
+            reverse_names: Vec::new(),
+            outcome,
+        });
+        if complete {
+            break;
+        }
+    }
+    Ok(hops)
+}
+
+fn connect_attempts(target: IpAddr, ttl: u8, retries: u8) -> io::Result<Vec<(Socket, u16)>> {
+    let domain = match target {
+        IpAddr::V4(_) => Domain::IPV4,
+        IpAddr::V6(_) => Domain::IPV6,
+    };
+    let destination = SockAddr::from(SocketAddr::new(target, HTTPS_PORT));
+    let mut attempts = Vec::with_capacity(retries as usize);
+    for _ in 0..retries {
+        let tcp = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        tcp.set_nonblocking(true)?;
+        match target {
+            IpAddr::V4(_) => tcp.set_ttl_v4(ttl as u32)?,
+            IpAddr::V6(_) => tcp.set_unicast_hops_v6(ttl as u32)?,
+        }
+        let unspecified = match target {
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        };
+        tcp.bind(&SockAddr::from(SocketAddr::new(unspecified, 0)))?;
+        if let Err(error) = tcp.connect(&destination) {
+            if !is_connect_in_progress(&error) && error.kind() != io::ErrorKind::ConnectionRefused {
+                continue;
+            }
+        }
+        let source_port = tcp
+            .local_addr()?
+            .as_socket()
+            .map(|addr| addr.port())
+            .unwrap_or(0);
+        attempts.push((tcp, source_port));
+    }
+    Ok(attempts)
+}
 
 pub async fn tcp_traceroute(
     target: IpAddr,
@@ -82,7 +207,7 @@ fn trace_blocking(
             return Err(last_error.unwrap_or_else(|| io::Error::other("no traceroute attempts")));
         }
         match wait_for_hop_response(&receiver, &tcp_attempts, target)? {
-            HopResponse::IcmpTimeExceeded => {
+            HopResponse::IcmpTimeExceeded(_) => {
                 return Ok(TcpTracerouteResult {
                     target,
                     result: TcpTracerouteOutcome::IcmpTimeExceeded { hop: ttl },
@@ -120,7 +245,7 @@ fn is_connect_in_progress(error: &io::Error) -> bool {
 }
 
 enum HopResponse {
-    IcmpTimeExceeded,
+    IcmpTimeExceeded(IpAddr),
     Rst,
     Connected,
     Timeout,
@@ -166,7 +291,7 @@ fn wait_on_poller(
 
     let deadline = Instant::now() + HOP_TIMEOUT;
     let mut watching_tcp = vec![true; tcp_attempts.len()];
-    let mut buffer = [0u8; 2048];
+    let mut buffer = [MaybeUninit::<u8>::uninit(); 2048];
     let mut events = Events::new();
 
     loop {
@@ -197,14 +322,20 @@ fn wait_on_poller(
         }
 
         if events.iter().any(|event| event.key == ICMP_KEY) {
-            let mut raw = receiver;
-            match raw.read(&mut buffer) {
-                Ok(bytes)
+            match receiver.recv_from(&mut buffer) {
+                Ok((bytes, source))
                     if tcp_attempts.iter().any(|(_, source_port)| {
-                        is_matching_time_exceeded(&buffer[..bytes], target, *source_port)
+                        // SAFETY: recv_from initialized the first `bytes` elements.
+                        let packet = unsafe {
+                            std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), bytes)
+                        };
+                        is_matching_time_exceeded(packet, target, *source_port)
                     }) =>
                 {
-                    return Ok(HopResponse::IcmpTimeExceeded);
+                    if let Some(address) = source.as_socket().map(|addr| addr.ip()) {
+                        return Ok(HopResponse::IcmpTimeExceeded(address));
+                    }
+                    poller.modify(receiver, Event::readable(ICMP_KEY))?;
                 }
                 Ok(_) => poller.modify(receiver, Event::readable(ICMP_KEY))?,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
