@@ -11,7 +11,7 @@ import {
 } from "$lib/api/probe";
 import EmptyResult from "$lib/components/EmptyResult.svelte";
 import ErrorMessage from "$lib/components/ErrorMessage.svelte";
-import Feedback from "$lib/components/Feedback.svelte";
+import FeedbackPopover from "$lib/components/FeedbackPopover.svelte";
 import ResultPanel from "$lib/components/ResultPanel.svelte";
 import ProbeTable from "$lib/components/result/ProbeTable.svelte";
 import SearchForm from "$lib/components/SearchForm.svelte";
@@ -138,19 +138,21 @@ const liveVerdict = $derived(
 		<ErrorMessage status={error.status} reason={error.message} />
 	</div>
 {:else if checkQuery.data}
-	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} {token} />
-
-	{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
-		<ProbeTable
-			probes={probeQuery.data.probes}
-			status={probeQuery.data.status}
-			isStaticCdn={checkQuery.data.providers.length > 0}
-		/>
-	{/if}
-
+	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} {token}>
+		{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
+			<ProbeTable
+				probes={probeQuery.data.probes}
+				status={probeQuery.data.status}
+				isStaticCdn={checkQuery.data.providers.length > 0}
+			/>
+		{/if}
+	</ResultPanel>
 	{#if checkQuery.data.id}
-		<div class="mt-4">
-			<Feedback id={checkQuery.data.id} />
-		</div>
+		{#key checkQuery.data.id}
+			<FeedbackPopover
+				id={checkQuery.data.id}
+				target={checkQuery.data.target}
+			/>
+		{/key}
 	{/if}
 {/if}

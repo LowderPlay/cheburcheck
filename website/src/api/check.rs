@@ -35,6 +35,45 @@ pub struct ApiCheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subnet_size: Option<String>,
     pub reverse_lookup: Vec<String>,
+    pub complaints: Vec<ComplaintDay>,
+}
+
+#[derive(Serialize)]
+pub struct ComplaintDay {
+    pub date: String,
+    pub count: i64,
+}
+
+async fn load_complaints(
+    db: &mut sqlx::PgConnection,
+    target: &Target,
+) -> Result<Vec<ComplaintDay>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"SELECT days.day::date::text AS "date!", COALESCE(reports.count, 0)::bigint AS "count!"
+         FROM generate_series(current_date - 13, current_date, interval '1 day') AS days(day)
+         LEFT JOIN (
+             SELECT h.date::date AS day, COUNT(DISTINCT h.source_ip)::bigint AS count
+             FROM human_reports h
+             JOIN queries q ON q.id = h.id
+             WHERE h.date >= current_date - 13
+               AND h.date < current_date + 1
+               AND h.works = false
+               AND LOWER(q.query) = LOWER($1)
+             GROUP BY h.date::date
+         ) reports ON reports.day = days.day::date
+         ORDER BY days.day"#,
+        target.to_query()
+    )
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ComplaintDay {
+            date: row.date,
+            count: row.count,
+        })
+        .collect())
 }
 
 #[get("/check?<target>")]
@@ -77,9 +116,22 @@ pub async fn check(
         None
     };
 
+    let complaints = match &check {
+        Ok(_) => match load_complaints(&mut db, &target).await {
+            Ok(days) => days,
+            Err(e) => {
+                warn!("api: failed to load complaints: {:?}", e);
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    };
+
     match check {
         Err(CheckError::NotFound) => Err(Status::NotFound),
-        Ok(check) => Ok(Json(build_response(id, &target, check, whitelist))),
+        Ok(check) => Ok(Json(build_response(
+            id, &target, check, whitelist, complaints,
+        ))),
         Err(e) => {
             log::error!("api check failed {:?}", e);
             Err(Status::InternalServerError)
@@ -92,6 +144,7 @@ fn build_response(
     target: &Target,
     check: Check,
     whitelist: Option<WhitelistedEntry>,
+    complaints: Vec<ComplaintDay>,
 ) -> ApiCheckResponse {
     let (blocked, rkn_domain, cdn_providers) = match check.verdict {
         CheckVerdict::Blocked {
@@ -121,5 +174,6 @@ fn build_response(
         asn_info: check.asn_info,
         whitelist,
         subnet_size: target.subnet_size(),
+        complaints,
     }
 }

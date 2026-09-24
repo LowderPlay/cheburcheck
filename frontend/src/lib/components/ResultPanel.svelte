@@ -12,9 +12,12 @@ import {
 	Server,
 	ShieldCheck,
 } from "@lucide/svelte";
+import type { Snippet } from "svelte";
 import type { CheckResult } from "$lib/api/check";
 import type { ResolvedProbeVerdict } from "$lib/api/probe";
 import DetailRow from "./DetailRow.svelte";
+import ComplaintTrend from "./result/ComplaintTrend.svelte";
+import { shouldShowComplaintTrend } from "./result/complaintTrend";
 import ResultIpList from "./result/ResultIpList.svelte";
 import ResultStatusHeader from "./result/ResultStatusHeader.svelte";
 import ResultStringList from "./result/ResultStringList.svelte";
@@ -28,10 +31,12 @@ let {
 	result,
 	probeVerdict = null,
 	token = "",
+	children,
 }: {
 	result: CheckResult;
 	probeVerdict?: ResolvedProbeVerdict | null;
 	token?: string;
+	children?: Snippet;
 } = $props();
 
 function checkHref(target: string): string {
@@ -82,18 +87,32 @@ const whitelistDate = $derived(
 );
 const providerCidrs = (provider: Provider) =>
 	provider.networks.map((network) => network.cidr);
+const showComplaintTrend = $derived(
+	shouldShowComplaintTrend(result.complaints),
+);
 </script>
 
 <div class="mt-8 space-y-6">
-	<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-		<div class={`border p-4 rounded-lg flex items-center ${panelClass}`}>
+	<div
+		class={showComplaintTrend ? "grid grid-cols-1 gap-4 md:grid-cols-2 md:grid-rows-2" : "grid grid-cols-1 gap-4 md:grid-cols-2"}
+	>
+		<div
+			class={`border p-4 rounded-lg flex items-center ${panelClass} ${showComplaintTrend ? "md:col-start-1 md:row-start-1" : ""}`}
+		>
 			<ResultStatusHeader {verdict} />
 		</div>
-		<ResultTargetCard
-			targetType={result.targetType}
-			target={result.target}
-			asnStats={result.asnInfo ? { total: allPrefixes.length, blocked: blockedPrefixes.length } : undefined}
-		/>
+		<div class={showComplaintTrend ? "md:col-start-1 md:row-start-2" : ""}>
+			<ResultTargetCard
+				targetType={result.targetType}
+				target={result.target}
+				asnStats={result.asnInfo ? { total: allPrefixes.length, blocked: blockedPrefixes.length } : undefined}
+			/>
+		</div>
+		{#if showComplaintTrend}
+			<div class="md:col-start-2 md:row-start-1 md:row-span-2">
+				<ComplaintTrend days={result.complaints} />
+			</div>
+		{/if}
 	</div>
 
 	<div class="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -246,4 +265,6 @@ const providerCidrs = (provider: Provider) =>
 			</div>
 		</div>
 	</div>
+
+	{@render children?.()}
 </div>

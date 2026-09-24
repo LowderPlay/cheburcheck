@@ -6,9 +6,7 @@ export default defineConfig({
 	server: {
 		proxy: {
 			"/api": {
-				target: "https://cheburcheck.ru",
-				secure: false,
-				changeOrigin: true,
+				target: "http://localhost:8080",
 			},
 		},
 	},

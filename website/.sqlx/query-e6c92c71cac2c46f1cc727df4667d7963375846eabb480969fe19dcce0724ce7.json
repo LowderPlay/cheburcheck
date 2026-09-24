@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT days.day::date::text AS \"date!\", COALESCE(reports.count, 0)::bigint AS \"count!\"\n         FROM generate_series(current_date - 13, current_date, interval '1 day') AS days(day)\n         LEFT JOIN (\n             SELECT h.date::date AS day, COUNT(DISTINCT h.source_ip)::bigint AS count\n             FROM human_reports h\n             JOIN queries q ON q.id = h.id\n             WHERE h.date >= current_date - 13\n               AND h.date < current_date + 1\n               AND h.works = false\n               AND LOWER(q.query) = LOWER($1)\n             GROUP BY h.date::date\n         ) reports ON reports.day = days.day::date\n         ORDER BY days.day",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "date!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "e6c92c71cac2c46f1cc727df4667d7963375846eabb480969fe19dcce0724ce7"
+}
