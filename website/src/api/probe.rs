@@ -11,14 +11,13 @@ use rocket::http::Status;
 use rocket::response::stream::{Event, EventStream};
 use rocket::serde::json::serde_json::Value;
 use rocket::serde::json::serde_json::json;
-use rocket::tokio::time;
+use rocket::tokio::{sync::Mutex, time};
 use rocket_client_addr::ClientRealAddr;
 use sqlx::postgres::PgPool;
 use sqlx::types::Uuid;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Instant;
 
 #[derive(sqlx::FromRow)]
 pub struct ProbeReporterInfo {
@@ -37,6 +36,7 @@ pub async fn probe_query(
     pool: &State<PgPool>,
     mqtt: &State<MqttPublisher>,
     limiter: &State<Arc<ProbeRateLimiter>>,
+    cache: &State<Arc<ProbeResponseCache>>,
 ) -> Result<EventStream![Event], Status> {
     if !limiter.check(&addr.ip) {
         return Err(Status::TooManyRequests);
@@ -73,7 +73,7 @@ pub async fn probe_query(
     }
 
     let (target_probe, eligible_probes) = load_probe_targets(pool, token).await?;
-    let expected_probes = if target_probe.is_some() {
+    let active_probes = if target_probe.is_some() {
         eligible_probes
     } else {
         mqtt.online_probe_ids(&eligible_probes).await
@@ -86,7 +86,6 @@ pub async fn probe_query(
         publish_error_status(error)
     })?;
 
-    let published_at = Instant::now();
     mqtt.publish_probe_task(id, domain, ip, target_probe.as_deref())
         .await
         .map_err(|error| {
@@ -96,6 +95,7 @@ pub async fn probe_query(
 
     let timeout = mqtt.task_timeout();
     let pool = pool.inner().clone();
+    let cache = cache.inner().clone();
     let query_id = id;
     let id = id.to_string();
     Ok(EventStream! {
@@ -109,11 +109,21 @@ pub async fn probe_query(
             "online_probes": online_probes,
         }).to_string()).event("started");
 
-        loop {
-            if responded_probes.len() >= online_probes {
-                yield done_event(&id, responded_probes.len(), online_probes);
-                break;
+        for (probe_id, mut entry) in cached {
+            entry.response["job_id"] = json!(id);
+            if let Err(error) = insert_probe_report(query_id, &entry.response, entry.target_traceroute.as_ref(), &pool).await {
+                warn!("api: failed to save cached probe report for query {id}: {error}");
             }
+            responded_probes.insert(probe_id);
+            yield Event::data(entry.response.to_string()).event("result");
+        }
+
+        if let Some(mut results) = results {
+            loop {
+                if responded_probes.len() >= online_probes {
+                    yield done_event(&id, responded_probes.len(), online_probes);
+                    break;
+                }
 
             rocket::tokio::select! {
                 result = results.recv() => {
@@ -122,8 +132,6 @@ pub async fn probe_query(
                             if !expected_probes.contains(&result.probe_id) {
                                 continue;
                             }
-                            let duration_ms = u64::try_from(published_at.elapsed().as_millis())
-                                .unwrap_or(u64::MAX);
                             let reporter_info = match fetch_probe_reporter_info(&result.probe_id, &pool).await {
                                 Ok(info) => info,
                                 Err(error) => {
@@ -150,7 +158,6 @@ pub async fn probe_query(
                                 query_id,
                                 &response,
                                 target_traceroute.as_ref(),
-                                duration_ms,
                                 &pool,
                             ).await {
                                 warn!("api: failed to save probe report for query {id}: {error}");
@@ -540,6 +547,58 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_is_scoped_by_target_and_probe_and_expires() {
+        rocket::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let cache = ProbeResponseCache::new(Duration::from_secs(10));
+                cache
+                    .insert("example.org", "42", json!({"job_id": "old"}), None)
+                    .await;
+                assert!(cache.get_all("example.org", &["42".into()]).await.is_some());
+                assert!(cache.get_all("other.org", &["42".into()]).await.is_none());
+                assert!(cache.get_all("example.org", &["43".into()]).await.is_none());
+                assert!(
+                    cache
+                        .get_all("example.org", &["42".into(), "43".into()])
+                        .await
+                        .is_none()
+                );
+                cache
+                    .insert("other.org", "42", json!({"job_id": "other"}), None)
+                    .await;
+                cache.invalidate_target("other.org").await;
+                assert!(cache.get_all("other.org", &["42".into()]).await.is_none());
+                assert!(cache.get_all("example.org", &["42".into()]).await.is_some());
+
+                cache
+                    .entries
+                    .lock()
+                    .await
+                    .get_mut(&("example.org".into(), "42".into()))
+                    .unwrap()
+                    .stored_at = Instant::now() - Duration::from_secs(11);
+                assert!(cache.get_all("example.org", &["42".into()]).await.is_none());
+            });
+    }
+
+    #[test]
+    fn zero_ttl_disables_cache() {
+        rocket::tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let cache = ProbeResponseCache::new(Duration::ZERO);
+                cache.insert("example.org", "42", json!({}), None).await;
+                assert!(cache.get_all("example.org", &["42".into()]).await.is_none());
+                assert!(cache.entries.lock().await.is_empty());
+            });
+    }
 
     #[test]
     fn disabled_traceroutes_are_not_persisted_or_used_in_public_verdicts() {
