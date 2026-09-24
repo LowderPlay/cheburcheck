@@ -89,9 +89,11 @@ export function selectProbeVerdict(
 
 	const votes = new Map<DisplayProbeVerdict, number>();
 	for (const probe of probes) {
-		for (const verdict of new Set(displayProbeVerdicts(probe, isStaticCdn))) {
-			votes.set(verdict, (votes.get(verdict) ?? 0) + 1);
-		}
+		const probeVerdicts = displayProbeVerdicts(probe, isStaticCdn);
+		const verdict = verdictPriority.find((candidate) =>
+			probeVerdicts.includes(candidate),
+		);
+		if (verdict) votes.set(verdict, (votes.get(verdict) ?? 0) + 1);
 	}
 
 	let winner: DisplayProbeVerdict | null = null;
