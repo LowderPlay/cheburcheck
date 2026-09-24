@@ -33,7 +33,7 @@ const labels: Record<ResultVerdict, { title: string; subtitle: string }> = {
 			"Домен снимает ограничение 16-20 КБ при подключении к заблокированным CDN",
 	},
 	cdn_block: {
-		title: "Заблокирован",
+		title: "Недоступен",
 		subtitle: "Сканеры обнаружили блокировку CDN (16-20 КБ)",
 	},
 	ok: {

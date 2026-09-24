@@ -36,7 +36,10 @@ type ApiCheckResponse = {
 	asn_info?: ApiAsnInfo | null;
 	whitelist?: ApiWhitelist | null;
 	subnet_size?: string | null;
+	complaints: ComplaintDay[];
 };
+
+export type ComplaintDay = { date: string; count: number };
 
 export type CheckResult = {
 	id?: string | null;
@@ -53,6 +56,7 @@ export type CheckResult = {
 	providers: { name: string; networks: ApiNetworkRecord[] }[];
 	blockedSubnets: string[];
 	asnInfo: { prefixes: string[]; blockedPrefixes: string[] } | null;
+	complaints: ComplaintDay[];
 };
 
 export class CheckRequestError extends Error {
@@ -113,5 +117,6 @@ export async function fetchCheck(target: string): Promise<CheckResult> {
 					blockedPrefixes: sortPrefixes(data.asn_info.blocked_prefixes),
 				}
 			: null,
+		complaints: data.complaints ?? [],
 	};
 }

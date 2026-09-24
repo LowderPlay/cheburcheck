@@ -75,6 +75,7 @@ async fn rocket() -> _ {
         api::build_probe_update_download_rate_limiter(probe_update_download_rate_limit_rpm),
     );
     let mqtt_publisher = mqtt::MqttPublisher::start_from_env();
+    let probe_response_cache = std::sync::Arc::new(api::ProbeResponseCache::from_env());
     let probe_update_proxy = probe_updates::ProbeUpdateProxy::from_env()
         .expect("failed to configure probe update proxy");
 
@@ -104,6 +105,7 @@ async fn rocket() -> _ {
         .manage(probe_limiter)
         .manage(probe_update_download_limiter)
         .manage(mqtt_publisher)
+        .manage(probe_response_cache)
         .manage(probe_update_proxy)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount(
