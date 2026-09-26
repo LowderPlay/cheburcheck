@@ -37,7 +37,11 @@ const selectedRegionProbes = $derived(
 		class="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-2"
 	>
 		<h3 class="flex items-center gap-2 text-sm font-bold uppercase text-white">
-			<Activity size={16} class="text-primary" />
+			{#if status.online_probes > 0 && probes.length < status.online_probes && status.status !== "done" && status.status !== "error"}
+				<LoaderCircle class="animate-spin text-primary" size={16} />
+			{:else}
+				<Activity size={16} class="text-primary" />
+			{/if}
 			<a
 				class="underline decoration-dotted underline-offset-2"
 				href="/kb/probing"
@@ -52,21 +56,6 @@ const selectedRegionProbes = $derived(
 			получено {probes.length} из {status.online_probes} ответов
 		</div>
 	</div>
-	{#if status.online_probes > 0 && probes.length < status.online_probes && status.status !== "done" && status.status !== "error"}
-		<div
-			class="h-1 overflow-hidden rounded-full bg-neutral-800"
-			role="progressbar"
-			aria-label="Ответы сканеров"
-			aria-valuenow={probes.length}
-			aria-valuemin="0"
-			aria-valuemax={status.online_probes}
-		>
-			<div
-				class="h-full bg-primary transition-all duration-500"
-				style:width={`${(probes.length / status.online_probes) * 100}%`}
-			></div>
-		</div>
-	{/if}
 	{#if probes.length === 0}
 		<div
 			class="rounded-lg border border-neutral-800 bg-neutral-900/20 p-8 text-center text-sm text-neutral-400"
