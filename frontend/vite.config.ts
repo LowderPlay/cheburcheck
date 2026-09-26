@@ -3,6 +3,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+	build: {
+		cssTarget: ["chrome110", "firefox112", "safari15.3"],
+	},
 	server: {
 		proxy: {
 			"/api": {
