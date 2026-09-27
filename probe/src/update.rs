@@ -382,7 +382,10 @@ fn install(kind: PackageKind, package: &Path, luci_package: Option<&Path>) -> Re
     match kind {
         PackageKind::Debian => {
             run_paths("dpkg-deb", &[Path::new("--info"), package])?;
-            run_paths("dpkg", &[Path::new("-i"), package])?;
+            run_paths(
+                "dpkg",
+                &[Path::new("--force-confold"), Path::new("-i"), package],
+            )?;
             run_args("systemctl", &["try-restart", "cheburprobe.service"])
         }
         PackageKind::Apk => {

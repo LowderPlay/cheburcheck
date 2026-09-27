@@ -235,7 +235,7 @@ install_package() {
 	case "$PLATFORM" in
 		debian)
 			log "installing $PACKAGE"
-			apt-get install -y "$WORK_DIR/$PACKAGE"
+			apt-get -o Dpkg::Options::=--force-confold install -y "$WORK_DIR/$PACKAGE"
 			;;
 		openwrt-apk)
 			set -- "$WORK_DIR/$PACKAGE"
