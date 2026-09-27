@@ -512,7 +512,7 @@ fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
         );
         return None;
     }
-    result.max_icmp_time_exceeded_ttl
+    Some(result.max_icmp_time_exceeded_ttl.unwrap_or(0))
 }
 
 async fn wait_for_connection(eventloop: &mut rumqttc::EventLoop) {
@@ -769,5 +769,22 @@ mod tests {
 
             assert_eq!(dpi_hop_from_result(&result), None);
         }
+    }
+
+    #[test]
+    fn missing_icmp_time_exceeded_defaults_dpi_hop_to_zero() {
+        let result = dpi_hop::DpiHopProbeResult {
+            target: "203.0.113.10:443".parse().unwrap(),
+            local_addr: "192.0.2.10:45000".parse().unwrap(),
+            client_hello_bytes: 256,
+            max_icmp_time_exceeded_ttl: None,
+            hops: vec![dpi_hop::DpiHopProbeHop {
+                ttl: 1,
+                router: None,
+                outcome: dpi_hop::DpiHopProbeHopOutcome::Timeout,
+            }],
+        };
+
+        assert_eq!(dpi_hop_from_result(&result), Some(0));
     }
 }
