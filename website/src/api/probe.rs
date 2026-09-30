@@ -140,7 +140,7 @@ pub async fn probe_query(
         }
     };
     let is_ip_target = domain.is_none();
-    let probe_config = mqtt.probe_config();
+    let probe_config = mqtt.probe_config().await;
     if domain.is_none() && !probe_config.traceroute_enabled {
         return Err(Status::BadRequest);
     }
@@ -648,6 +648,7 @@ fn publish_error_status(error: PublishError) -> Status {
         | PublishError::Serialize(_)
         | PublishError::Subscribe(_)
         | PublishError::Publish(_) => Status::InternalServerError,
+        PublishError::CommandTimeout => Status::GatewayTimeout,
     }
 }
 

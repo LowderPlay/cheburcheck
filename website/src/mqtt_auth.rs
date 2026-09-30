@@ -109,6 +109,20 @@ pub async fn acl(
     if request.username != "probe" || request.clientid.is_empty() {
         return Json(MqttAuthResponse::deny());
     }
+    let Ok(reporter_id) = request.clientid.parse::<i32>() else {
+        return Json(MqttAuthResponse::deny());
+    };
+    let active =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM reporters WHERE id = $1)")
+            .bind(reporter_id)
+            .fetch_optional(&**pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+    if !active {
+        return Json(MqttAuthResponse::deny());
+    }
 
     match request.access {
         1 if can_probe_subscribe(request.clientid, request.topic, pool).await => {

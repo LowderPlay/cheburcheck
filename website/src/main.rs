@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate rocket;
+mod admin;
 mod agency;
 mod api;
 mod database_refresh;
@@ -121,6 +122,19 @@ async fn rocket() -> _ {
             ],
         )
         .mount("/agency", routes![agency::upload_report])
+        .mount(
+            "/api/v1/admin",
+            routes![
+                admin::list,
+                admin::create,
+                admin::update,
+                admin::remove,
+                admin::reload,
+                admin::update_all_probes,
+                admin::update_one_probe,
+                admin::command
+            ],
+        )
         .mount("/mqtt", routes![mqtt_auth::auth, mqtt_auth::acl])
         .mount(
             "/api/v1/probe-updates",

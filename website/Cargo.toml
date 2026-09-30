@@ -20,4 +20,6 @@ dotenvy = { version = "0.15.7" }
 governor = { version = "0.6", features = ["dashmap"] }
 rumqttc = "0.24"
 toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
 reqwest = { workspace = true }
+rand = "0.10.3"

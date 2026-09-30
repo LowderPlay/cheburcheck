@@ -1,7 +1,8 @@
 use log::{info, warn};
 use reports::probe::HostType;
 use reports::probe::{
-    DpiProbeConfig, Host, ProbeConfig, ProbeResult, ProbeResultEvent, ProbeStatus, ProbeTask,
+    DpiProbeConfig, Host, ProbeCommand, ProbeCommandResult, ProbeConfig, ProbeResult,
+    ProbeResultEvent, ProbeStatus, ProbeTask,
 };
 use rocket::serde::json::serde_json;
 use rumqttc::{AsyncClient, Event as MqttEvent, Incoming, MqttOptions, QoS};
@@ -16,8 +17,6 @@ use std::time::Duration;
 
 const MQTT_MAX_PACKET_SIZE: usize = 1024 * 1024;
 
-const DEFAULT_PROBE_HOSTS: &str = include_str!("../probe-hosts.toml");
-
 #[derive(Debug)]
 pub enum PublishError {
     NotConfigured,
@@ -26,6 +25,7 @@ pub enum PublishError {
     Serialize(serde_json::Error),
     Subscribe(rumqttc::ClientError),
     Publish(rumqttc::ClientError),
+    CommandTimeout,
 }
 
 impl fmt::Display for PublishError {
@@ -45,6 +45,7 @@ impl fmt::Display for PublishError {
                 write!(formatter, "failed to subscribe to results: {error}")
             }
             PublishError::Publish(error) => write!(formatter, "failed to publish task: {error}"),
+            PublishError::CommandTimeout => write!(formatter, "probe command timed out"),
         }
     }
 }
@@ -54,7 +55,18 @@ pub struct MqttPublisher {
     client: Option<AsyncClient>,
     sessions: Arc<rocket::tokio::sync::RwLock<HashMap<String, ProbeResultSender>>>,
     probe_statuses: ProbeStatuses,
-    probe_config: Arc<ProbeConfig>,
+    probe_config: Arc<rocket::tokio::sync::RwLock<ProbeConfig>>,
+    command_sessions: Arc<
+        rocket::tokio::sync::Mutex<
+            HashMap<
+                String,
+                (
+                    String,
+                    rocket::tokio::sync::oneshot::Sender<ProbeCommandResult>,
+                ),
+            >,
+        >,
+    >,
     task_timeout_ms: u64,
 }
 
@@ -99,20 +111,23 @@ impl MqttPublisher {
         let sessions = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
         let probe_statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
         let task_timeout_ms = task_timeout_ms_from_env();
-        let probe_config = Arc::new(load_probe_config(task_timeout_ms).unwrap_or_else(|error| {
-            warn!("failed to load probe config: {error}");
-            ProbeConfig {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                task_timeout_ms,
-                published_at: Utc::now().to_rfc3339(),
-                hosts: Vec::new(),
-                traceroute_enabled: false,
-                dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
-                dns_spoofing_provider_threshold:
-                    reports::probe::default_dns_spoofing_provider_threshold(),
-                dpi_probe: None,
-            }
-        }));
+        let probe_config = Arc::new(rocket::tokio::sync::RwLock::new(
+            load_probe_config(task_timeout_ms).unwrap_or_else(|error| {
+                warn!("failed to load probe config: {error}");
+                ProbeConfig {
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    task_timeout_ms,
+                    published_at: Utc::now().to_rfc3339(),
+                    hosts: Vec::new(),
+                    traceroute_enabled: false,
+                    dns_samples_per_protocol: reports::probe::default_dns_samples_per_protocol(),
+                    dns_spoofing_provider_threshold:
+                        reports::probe::default_dns_spoofing_provider_threshold(),
+                    dpi_probe: None,
+                }
+            }),
+        ));
+        let command_sessions = Arc::new(rocket::tokio::sync::Mutex::new(HashMap::new()));
         let admin_token = match std::env::var("MQTT_ADMIN_TOKEN") {
             Ok(token) if !token.is_empty() => token,
             _ => {
@@ -122,6 +137,7 @@ impl MqttPublisher {
                     sessions,
                     probe_statuses,
                     probe_config,
+                    command_sessions,
                     task_timeout_ms: task_timeout_ms_from_env(),
                 };
             }
@@ -145,12 +161,26 @@ impl MqttPublisher {
         let event_probe_statuses = probe_statuses.clone();
         let config_client = client.clone();
         let event_probe_config = probe_config.clone();
+        let event_command_sessions = command_sessions.clone();
         rocket::tokio::spawn(async move {
             loop {
                 match eventloop.poll().await {
                     Ok(MqttEvent::Incoming(Incoming::ConnAck(_))) => {
+                        if let Err(error) = config_client
+                            .subscribe("probe/status/v1/+", QoS::AtLeastOnce)
+                            .await
+                        {
+                            warn!("failed to subscribe to probe status updates: {error}");
+                        }
+                        if let Err(error) = config_client
+                            .subscribe("probe/command-results/v1/+/+", QoS::AtLeastOnce)
+                            .await
+                        {
+                            warn!("failed to subscribe to command results: {error}");
+                        }
                         if let Err(error) =
-                            publish_probe_config(&config_client, event_probe_config.as_ref()).await
+                            publish_probe_config(&config_client, &*event_probe_config.read().await)
+                                .await
                         {
                             warn!("failed to publish retained probe config: {error}");
                         }
@@ -164,6 +194,23 @@ impl MqttPublisher {
                             &publish.payload,
                         )
                         .await;
+                        if let Some((probe_id, command_id)) =
+                            parse_command_result_topic(&publish.topic)
+                        {
+                            if let Ok(result) =
+                                serde_json::from_slice::<ProbeCommandResult>(&publish.payload)
+                            {
+                                let mut sessions = event_command_sessions.lock().await;
+                                if sessions
+                                    .get(command_id)
+                                    .is_some_and(|(expected, _)| expected == probe_id)
+                                {
+                                    if let Some((_, sender)) = sessions.remove(command_id) {
+                                        let _ = sender.send(result);
+                                    }
+                                }
+                            }
+                        }
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -174,22 +221,13 @@ impl MqttPublisher {
             }
         });
 
-        let status_client = client.clone();
-        rocket::tokio::spawn(async move {
-            if let Err(error) = status_client
-                .subscribe("probe/status/v1/+", QoS::AtLeastOnce)
-                .await
-            {
-                warn!("failed to subscribe to probe status updates: {error}");
-            }
-        });
-
         info!("mqtt publisher configured for {host}:{port}");
         Self {
             client: Some(client),
             sessions,
             probe_statuses,
             probe_config,
+            command_sessions,
             task_timeout_ms,
         }
     }
@@ -215,8 +253,58 @@ impl MqttPublisher {
         self.probe_statuses.read().await.clone()
     }
 
-    pub fn probe_config(&self) -> Arc<ProbeConfig> {
-        self.probe_config.clone()
+    pub async fn probe_config(&self) -> ProbeConfig {
+        self.probe_config.read().await.clone()
+    }
+
+    pub async fn reload_probe_config(&self) -> Result<ProbeConfig, PublishError> {
+        let config = load_probe_config(self.task_timeout_ms)?;
+        let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
+        publish_probe_config(client, &config).await?;
+        *self.probe_config.write().await = config.clone();
+        Ok(config)
+    }
+
+    pub async fn request_probe_update(&self, probe_id: Option<&str>) -> Result<(), PublishError> {
+        let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
+        let topic = probe_update_topic(probe_id);
+        client
+            .publish(topic, QoS::AtLeastOnce, false, b"check".as_slice())
+            .await
+            .map_err(PublishError::Publish)
+    }
+
+    pub async fn send_command(
+        &self,
+        probe_id: &str,
+        command: ProbeCommand,
+    ) -> Result<ProbeCommandResult, PublishError> {
+        let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
+        let command_id = uuid::Uuid::new_v4().to_string();
+        let (sender, receiver) = rocket::tokio::sync::oneshot::channel();
+        self.command_sessions
+            .lock()
+            .await
+            .insert(command_id.clone(), (probe_id.to_owned(), sender));
+        let payload = serde_json::to_vec(&command).map_err(PublishError::Serialize)?;
+        let published = client
+            .publish(
+                format!("probe/commands/v1/{probe_id}/{command_id}"),
+                QoS::AtLeastOnce,
+                false,
+                payload,
+            )
+            .await;
+        if let Err(error) = published {
+            self.command_sessions.lock().await.remove(&command_id);
+            return Err(PublishError::Publish(error));
+        }
+        let result = rocket::tokio::time::timeout(Duration::from_secs(60), receiver).await;
+        self.command_sessions.lock().await.remove(&command_id);
+        result
+            .ok()
+            .and_then(Result::ok)
+            .ok_or(PublishError::CommandTimeout)
     }
 
     pub async fn subscribe_probe_results(
@@ -296,12 +384,17 @@ async fn publish_probe_config(
 }
 
 fn load_probe_config(task_timeout_ms: u64) -> Result<ProbeConfig, PublishError> {
-    let config = if let Some(path) = std::env::var_os("PROBE_CONFIG_PATH") {
-        let contents = std::fs::read_to_string(path).map_err(PublishError::Config)?;
-        parse_probe_hosts(&contents)?
-    } else {
-        parse_probe_hosts(DEFAULT_PROBE_HOSTS)?
-    };
+    let path = std::env::var_os("PROBE_CONFIG_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            if std::path::Path::new("website/probe-hosts.toml").exists() {
+                "website/probe-hosts.toml".into()
+            } else {
+                "probe-hosts.toml".into()
+            }
+        });
+    let contents = std::fs::read_to_string(path).map_err(PublishError::Config)?;
+    let config = parse_probe_hosts(&contents)?;
     Ok(ProbeConfig {
         version: env!("CARGO_PKG_VERSION").to_string(),
         task_timeout_ms,
@@ -415,6 +508,13 @@ async fn dispatch_probe_result(
     }
 }
 
+fn probe_update_topic(probe_id: Option<&str>) -> String {
+    match probe_id {
+        Some(id) => format!("probe/update/v1/{id}"),
+        None => "probe/update/v1".to_string(),
+    }
+}
+
 fn parse_probe_status_topic(topic: &str) -> Option<&str> {
     let mut parts = topic.split('/');
     match (
@@ -425,6 +525,28 @@ fn parse_probe_status_topic(topic: &str) -> Option<&str> {
         parts.next(),
     ) {
         (Some("probe"), Some("status"), Some("v1"), Some(probe_id), None) => Some(probe_id),
+        _ => None,
+    }
+}
+
+fn parse_command_result_topic(topic: &str) -> Option<(&str, &str)> {
+    let mut parts = topic.split('/');
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (
+            Some("probe"),
+            Some("command-results"),
+            Some("v1"),
+            Some(probe_id),
+            Some(command_id),
+            None,
+        ) if !probe_id.is_empty() && !command_id.is_empty() => Some((probe_id, command_id)),
         _ => None,
     }
 }
@@ -456,6 +578,28 @@ fn task_timeout_ms_from_env() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_check_uses_global_or_targeted_topic() {
+        assert_eq!(probe_update_topic(None), "probe/update/v1");
+        assert_eq!(probe_update_topic(Some("42")), "probe/update/v1/42");
+    }
+
+    #[test]
+    fn command_result_topics_require_exact_probe_and_command() {
+        assert_eq!(
+            parse_command_result_topic("probe/command-results/v1/42/abc"),
+            Some(("42", "abc"))
+        );
+        assert_eq!(
+            parse_command_result_topic("probe/command-results/v1/42/abc/extra"),
+            None
+        );
+        assert_eq!(
+            parse_command_result_topic("probe/command-results/v1/42/"),
+            None
+        );
+    }
 
     #[rocket::async_test]
     async fn status_snapshot_keeps_offline_node_metadata() {

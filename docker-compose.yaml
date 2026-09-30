@@ -32,6 +32,8 @@ services:
       DATABASE_CACHE_DIR: /var/cache/cheburcheck/databases
       DATABASE_RETRY_INTERVAL_SECONDS: "${DATABASE_RETRY_INTERVAL_SECONDS:-300}"
       MQTT_ADMIN_TOKEN: "${MQTT_ADMIN_TOKEN}"
+      MQTT_ADMIN_PASSWORD: "${MQTT_ADMIN_PASSWORD}"
+      PROBE_CONFIG_PATH: /app/probe-hosts.toml
       NODE_STATS_KEY: "${NODE_STATS_KEY}"
       MQTT_HOST: rmqtt
       MQTT_PORT: 11883
@@ -46,6 +48,7 @@ services:
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
     volumes:
       - database-cache:/var/cache/cheburcheck/databases
+      - ./website/probe-hosts.toml:/app/probe-hosts.toml:ro
     expose:
       - "8000"
 
