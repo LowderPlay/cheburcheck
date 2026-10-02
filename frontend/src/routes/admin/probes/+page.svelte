@@ -40,9 +40,30 @@ type Hop = {
 	reverse_names: string[];
 	outcome: string;
 };
+type DpiHop = { ttl: number; src: string | null; outcome: string };
+type CommandType =
+	| "resubscribe_tasks"
+	| "traceroute"
+	| "remeasure_dpi_hop"
+	| "sni_traceroute";
 type CommandResult =
 	| { type: "traceroute"; target: string; hops: Hop[] }
 	| { type: "resubscribe_tasks"; requested: boolean }
+	| {
+			type: "remeasure_dpi_hop";
+			dpi_hop_v4: number | null;
+			dpi_hop_v6: number | null;
+			dpi_hops_v4: DpiHop[];
+			dpi_hops_v6: DpiHop[];
+	  }
+	| {
+			type: "sni_traceroute";
+			host: string;
+			sni: string;
+			target: string;
+			dpi_hop: number | null;
+			hops: DpiHop[];
+	  }
 	| { type: "error"; message: string };
 type Form = Pick<
 	Probe,
@@ -77,6 +98,8 @@ let created = $state<{ id: number; token: string } | null>(null);
 let selected = $state<number | null>(null);
 let target = $state("");
 let maxHops = $state(30);
+let traceType = $state<"traceroute" | "sni_traceroute">("traceroute");
+let sni = $state("");
 let result = $state<CommandResult | null>(null);
 
 const queryClient = useQueryClient();
@@ -133,16 +156,22 @@ const sendProbeCommand = createMutation(() => ({
 		type,
 		target,
 		maxHops,
+		sni,
 	}: {
 		id: number;
-		type: "resubscribe_tasks" | "traceroute";
+		type: CommandType;
 		target: string;
 		maxHops: number;
+		sni: string;
 	}) =>
 		api<CommandResult>(
 			"/probes/" + id + "/commands",
 			"POST",
-			type === "traceroute" ? { type, target, max_hops: maxHops } : { type },
+			type === "traceroute"
+				? { type, target, max_hops: maxHops }
+				: type === "sni_traceroute"
+					? { type, host: target, sni, max_hops: maxHops }
+					: { type },
 		),
 }));
 $effect(() => {
@@ -324,7 +353,7 @@ async function updateCheck(id: number | null) {
 		busy = "";
 	}
 }
-async function command(id: number, type: "resubscribe_tasks" | "traceroute") {
+async function command(id: number, type: CommandType) {
 	selected = id;
 	result = null;
 	busy = `${id}:command`;
@@ -335,7 +364,11 @@ async function command(id: number, type: "resubscribe_tasks" | "traceroute") {
 			type,
 			target: target.trim(),
 			maxHops,
+			sni: sni.trim(),
 		});
+		if (result.type === "remeasure_dpi_hop") {
+			await queryClient.invalidateQueries({ queryKey: probeKey });
+		}
 	} catch (e) {
 		error = String(e instanceof Error ? e.message : e);
 	} finally {
@@ -354,9 +387,32 @@ const outcomeLabel: Record<string, string> = {
 	icmp_time_exceeded: "Промежуточный узел",
 	rst: "TCP RST",
 	connected: "Подключено",
+	tcp_closed: "TCP закрыт",
+	tcp_acknowledged: "TCP подтверждён",
 	timeout: "Нет ответа",
 };
 </script>
+
+{#snippet dpiHops(hops: DpiHop[])}
+	<ol class="space-y-1">
+		{#each hops as hop}
+			<li
+				class="grid grid-cols-[2.5rem_1fr_auto] gap-3 rounded-lg border border-neutral-800 bg-black/20 px-3 py-2 text-sm"
+			>
+				<span class="font-mono text-neutral-500">{hop.ttl}</span>
+				<span class="font-mono">{hop.src ?? "* * *"}</span>
+				<span class="text-xs text-neutral-500"
+					>{outcomeLabel[hop.outcome] ?? hop.outcome}</span
+				>
+			</li>
+		{/each}
+	</ol>
+	{#if hops.length === 0}
+		<p class="text-sm text-neutral-500">
+			Измерение не удалось: ответов нет. Подробности в логах сканера.
+		</p>
+	{/if}
+{/snippet}
 
 <svelte:head
 	><title>Сканеры · Cheburcheck</title>
@@ -494,7 +550,7 @@ const outcomeLabel: Record<string, string> = {
 										{probe.version ?? "Версия неизвестна"}
 										{probe.bundle_type ? `· ${probe.bundle_type}` : ""}
 									</div>
-									{#if probe.dpi_hop_v4 || probe.dpi_hop_v6}
+									{#if probe.dpi_hop_v4 !== null || probe.dpi_hop_v6 !== null}
 										<div class="mt-1 text-xs text-neutral-500">
 											v4: <b>{probe.dpi_hop_v4 ?? "—"}</b>; v6:
 											<b>{probe.dpi_hop_v6 ?? "—"}</b>
@@ -559,6 +615,14 @@ const outcomeLabel: Record<string, string> = {
 										>
 											<RefreshCw size={14} />
 											Переподписать
+										</button><button
+											type="button"
+											class="link"
+											disabled={busy !== "" || !probe.online}
+											onclick={() => void command(probe.id, "remeasure_dpi_hop")}
+										>
+											<RefreshCw size={14} />
+											Перемерить DPI hop
 										</button><button
 											type="button"
 											class="link"
@@ -688,8 +752,41 @@ PROBE_TOKEN={created.token}</pre>
 		<section id="commands" class="panel">
 			<h2 class="mb-2 text-lg font-semibold">Команды и трассировка</h2>
 			<p class="mb-5 text-sm text-neutral-400">
-				Команда выполняется выбранным сканером. Ответ может занять до минуты.
+				Команда выполняется выбранным сканером. DPI и SNI измерения могут занять
+				несколько минут.
 			</p>
+			<div class="mb-4 flex flex-wrap items-end gap-3">
+				<label class="field"
+					>Режим трассировки
+					<select class="input" bind:value={traceType}>
+						<option value="traceroute">TCP traceroute</option>
+						<option value="sni_traceroute">SNI traceroute (DPI)</option>
+					</select>
+				</label>
+				<button
+					type="button"
+					class="btn"
+					disabled={selected === null || busy !== ""}
+					onclick={() => selected !== null && void command(selected, "remeasure_dpi_hop")}
+				>
+					Перемерить DPI hop
+				</button>
+			</div>
+			{#if traceType === "sni_traceroute"}
+				<label class="field mb-4"
+					>SNI<input
+						class="input"
+						type="text"
+						placeholder="rutracker.org"
+						bind:value={sni}
+					></label
+				>
+				<p class="mb-4 text-sm text-neutral-400">
+					TCP-соединение к хосту на порту 443, ClientHello с указанным SNI,
+					затем пакеты с возрастающим TTL. Хост разрешается сканером;
+					используется первый IP адрес.
+				</p>
+			{/if}
 			<div class="grid gap-3 sm:grid-cols-[1fr_2fr_100px_auto] sm:items-end">
 				<label class="field"
 					>Сканер<select class="input" bind:value={selected}>
@@ -699,7 +796,7 @@ PROBE_TOKEN={created.token}</pre>
 						{/each}
 					</select></label
 				><label class="field"
-					>IP адрес цели<input
+					>{traceType === "sni_traceroute" ? "Хост или IP адрес цели" : "IP адрес цели"}<input
 						class="input"
 						type="text"
 						placeholder="1.1.1.1"
@@ -716,8 +813,8 @@ PROBE_TOKEN={created.token}</pre>
 				><button
 					type="button"
 					class="btn-primary flex items-center justify-center gap-2"
-					disabled={selected === null || !target.trim() || busy !== ""}
-					onclick={() => selected !== null && void command(selected, "traceroute")}
+					disabled={selected === null || !target.trim() || (traceType === "sni_traceroute" && !sni.trim()) || !Number.isInteger(maxHops) || maxHops < 1 || maxHops > 64 || busy !== ""}
+					onclick={() => selected !== null && void command(selected, traceType)}
 				>
 					<Route size={16} />
 					Запустить
@@ -732,6 +829,29 @@ PROBE_TOKEN={created.token}</pre>
 				<p class="mt-5 text-sm text-emerald-300">
 					Запрос на переподписку получен сканером.
 				</p>
+			{:else if result?.type === "remeasure_dpi_hop"}
+				<p class="mt-5 text-sm text-emerald-300">
+					DPI hop перемерен: v4 {result.dpi_hop_v4 ?? "—"}; v6
+					{result.dpi_hop_v6 ?? "—"}.
+				</p>
+				<div class="mt-4 grid gap-4 sm:grid-cols-2">
+					{#each [{ label: "IPv4", hops: result.dpi_hops_v4 }, { label: "IPv6", hops: result.dpi_hops_v6 }] as trace}
+						<div>
+							<h3 class="mb-2 font-semibold">{trace.label}</h3>
+							{@render dpiHops(trace.hops)}
+						</div>
+					{/each}
+				</div>
+			{:else if result?.type === "sni_traceroute"}
+				<div class="mt-6">
+					<h3 class="mb-2 font-semibold">
+						SNI маршрут до {result.host} ({result.target})
+					</h3>
+					<p class="mb-4 text-sm text-neutral-400">
+						SNI: {result.sni}; DPI hop: {result.dpi_hop ?? "—"}
+					</p>
+					{@render dpiHops(result.hops)}
+				</div>
 			{:else if result?.type === "traceroute"}
 				<div class="mt-6">
 					<h3 class="mb-4 font-semibold">Маршрут до {result.target}</h3>

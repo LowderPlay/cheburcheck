@@ -31,12 +31,16 @@ struct LoadedProbeConfig {
     config: ProbeConfig,
     dpi_hop_v4: Option<u8>,
     dpi_hop_v6: Option<u8>,
+    dpi_hops_v4: Vec<reports::probe::DpiProbeHop>,
+    dpi_hops_v6: Vec<reports::probe::DpiProbeHop>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct DpiHops {
     v4: Option<u8>,
     v6: Option<u8>,
+    hops_v4: Vec<reports::probe::DpiProbeHop>,
+    hops_v6: Vec<reports::probe::DpiProbeHop>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -136,6 +140,8 @@ async fn main() -> Result<()> {
         bundle_type: Some(args.bundle_type),
         dpi_hop_v4: None,
         dpi_hop_v6: None,
+        dpi_hops_v4: Vec::new(),
+        dpi_hops_v6: Vec::new(),
     })?;
 
     let mut options = MqttOptions::new(&args.probe_id, &args.mqtt_host, args.mqtt_port);
@@ -203,6 +209,9 @@ async fn main() -> Result<()> {
                     let probe_id = args.probe_id.clone();
                     let payload = publish.payload.to_vec();
                     let retries = args.traceroute_retries;
+                    let command_args = args.clone();
+                    let command_status_topic = status_topic.clone();
+                    let command_config = config.clone();
                     let semaphore = task_semaphore.clone();
                     tokio::spawn(async move {
                         let result = match serde_json::from_slice::<ProbeCommand>(&payload) {
@@ -233,6 +242,39 @@ async fn main() -> Result<()> {
                                     },
                                 }
                             }
+                            Ok(
+                                command @ (ProbeCommand::RemeasureDpiHop
+                                | ProbeCommand::SniTraceroute { .. }),
+                            ) => match semaphore.acquire_owned().await {
+                                Ok(_permit) => {
+                                    match run_dpi_command(command, &command_config).await {
+                                        Ok((result, status)) => {
+                                            if let Some(hops) = status {
+                                                if let Err(error) = publish_status(
+                                                    &client,
+                                                    &command_status_topic,
+                                                    &command_args,
+                                                    true,
+                                                    hops,
+                                                )
+                                                .await
+                                                {
+                                                    warn!(
+                                                        "failed to publish remeasured DPI status: {error}"
+                                                    );
+                                                }
+                                            }
+                                            result
+                                        }
+                                        Err(error) => ProbeCommandResult::Error {
+                                            message: error.to_string(),
+                                        },
+                                    }
+                                }
+                                Err(error) => ProbeCommandResult::Error {
+                                    message: error.to_string(),
+                                },
+                            },
                             Err(error) => ProbeCommandResult::Error {
                                 message: format!("invalid command: {error}"),
                             },
@@ -300,6 +342,8 @@ async fn main() -> Result<()> {
                         .map_or_else(DpiHops::default, |config| DpiHops {
                             v4: config.dpi_hop_v4,
                             v6: config.dpi_hop_v6,
+                            hops_v4: config.dpi_hops_v4.clone(),
+                            hops_v6: config.dpi_hops_v6.clone(),
                         });
                 publish_status(&client, &status_topic, &args, true, dpi_hops).await?;
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
@@ -422,6 +466,8 @@ async fn update_config(
         config: value,
         dpi_hop_v4: dpi_hops.v4,
         dpi_hop_v6: dpi_hops.v6,
+        dpi_hops_v4: dpi_hops.hops_v4.clone(),
+        dpi_hops_v6: dpi_hops.hops_v6.clone(),
     };
     debug!(
         "measured DPI hops: IPv4={:?}, IPv6={:?}",
@@ -430,6 +476,98 @@ async fn update_config(
     *config.write().await = Some(loaded);
     info!("updated retained probe config");
     Ok(dpi_hops)
+}
+
+async fn run_dpi_command(
+    command: ProbeCommand,
+    config: &Arc<RwLock<Option<LoadedProbeConfig>>>,
+) -> Result<(ProbeCommandResult, Option<DpiHops>)> {
+    match command {
+        ProbeCommand::RemeasureDpiHop => {
+            let snapshot = config
+                .read()
+                .await
+                .clone()
+                .context("probe config is not loaded")?;
+            let dpi = snapshot
+                .config
+                .dpi_probe
+                .as_ref()
+                .context("DPI hop measurement is not configured")?;
+            let hops = measure_dpi_hops(Some(dpi)).await;
+            let mut guard = config.write().await;
+            let loaded = guard.as_mut().context("probe config is not loaded")?;
+            if loaded.config.version != snapshot.config.version
+                || loaded.config.published_at != snapshot.config.published_at
+                || serde_json::to_vec(&loaded.config.dpi_probe)?
+                    != serde_json::to_vec(&snapshot.config.dpi_probe)?
+            {
+                bail!("probe config changed during measurement; retry the command");
+            }
+            loaded.dpi_hop_v4 = hops.v4;
+            loaded.dpi_hop_v6 = hops.v6;
+            loaded.dpi_hops_v4 = hops.hops_v4.clone();
+            loaded.dpi_hops_v6 = hops.hops_v6.clone();
+            Ok((
+                ProbeCommandResult::RemeasureDpiHop {
+                    dpi_hop_v4: hops.v4,
+                    dpi_hop_v6: hops.v6,
+                    dpi_hops_v4: hops.hops_v4.clone(),
+                    dpi_hops_v6: hops.hops_v6.clone(),
+                },
+                Some(hops),
+            ))
+        }
+        ProbeCommand::SniTraceroute {
+            host,
+            sni,
+            max_hops,
+        } => {
+            if !(1..=64).contains(&max_hops) {
+                bail!("max_hops must be between 1 and 64");
+            }
+            reports::probe::validate_sni_traceroute(&host, &sni).map_err(anyhow::Error::msg)?;
+            // Resolve on the probe so the route reflects its own network/DNS view.
+            let target = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::net::lookup_host((host.as_str(), 443)),
+            )
+            .await
+            .context("host resolution timed out")??
+            .next()
+            .context("host resolved to no addresses")?;
+            let dpi_config = config
+                .read()
+                .await
+                .as_ref()
+                .and_then(|loaded| loaded.config.dpi_probe.clone());
+            let trace = dpi_hop::detect_dpi_hop(dpi_hop::DpiHopProbeConfig {
+                target,
+                control_sni: sni.clone(),
+                max_ttl: max_hops,
+                connect_timeout: Duration::from_secs(5),
+                hop_timeout: Duration::from_secs(1),
+                accept_rst_fin_as_timeout: dpi_config
+                    .as_ref()
+                    .is_some_and(|dpi| dpi.accept_rst_fin_as_timeout),
+                accept_ack_as_timeout: dpi_config
+                    .as_ref()
+                    .is_some_and(|dpi| dpi.accept_ack_as_timeout),
+            })
+            .await?;
+            Ok((
+                ProbeCommandResult::SniTraceroute {
+                    host,
+                    sni,
+                    target,
+                    dpi_hop: dpi_hop_from_result(&trace),
+                    hops: trace.hops,
+                },
+                None,
+            ))
+        }
+        _ => bail!("unsupported DPI command"),
+    }
 }
 
 fn validate_dpi_probe_config(config: Option<&DpiProbeConfig>) -> Result<()> {
@@ -471,21 +609,30 @@ async fn measure_dpi_hops(config: Option<&DpiProbeConfig>) -> DpiHops {
         max_ttl: config.max_ttl,
         connect_timeout: Duration::from_millis(config.connect_timeout_ms),
         hop_timeout: Duration::from_millis(config.hop_timeout_ms),
+        accept_rst_fin_as_timeout: config.accept_rst_fin_as_timeout,
+        accept_ack_as_timeout: config.accept_ack_as_timeout,
     };
     let (v4, v6) = tokio::join!(
         measure_dpi_hop(common(config.target_v4.into())),
         measure_dpi_hop(common(config.target_v6.into())),
     );
-    DpiHops { v4, v6 }
+    DpiHops {
+        v4: v4.0,
+        v6: v6.0,
+        hops_v4: v4.1,
+        hops_v6: v6.1,
+    }
 }
 
-async fn measure_dpi_hop(config: dpi_hop::DpiHopProbeConfig) -> Option<u8> {
+async fn measure_dpi_hop(
+    config: dpi_hop::DpiHopProbeConfig,
+) -> (Option<u8>, Vec<reports::probe::DpiProbeHop>) {
     let target = config.target;
     match dpi_hop::detect_dpi_hop(config).await {
-        Ok(result) => dpi_hop_from_result(&result),
+        Ok(result) => (dpi_hop_from_result(&result), result.hops),
         Err(error) => {
             warn!("failed to measure DPI hop for {target}: {error}");
-            None
+            (None, Vec::new())
         }
     }
 }
@@ -547,6 +694,8 @@ async fn publish_status(
         bundle_type: Some(args.bundle_type),
         dpi_hop_v4: dpi_hops.v4,
         dpi_hop_v6: dpi_hops.v6,
+        dpi_hops_v4: dpi_hops.hops_v4,
+        dpi_hops_v6: dpi_hops.hops_v6,
     })?;
 
     client
@@ -695,6 +844,31 @@ mod tests {
         assert_eq!(command_id("probe/commands/v1/42/trace-1/extra", "42"), None);
     }
 
+    #[tokio::test]
+    async fn remeasurement_requires_a_loaded_dpi_configuration() {
+        let config = Arc::new(RwLock::new(None));
+        let error = run_dpi_command(ProbeCommand::RemeasureDpiHop, &config)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("not loaded"));
+        assert!(config.read().await.is_none());
+    }
+
+    #[test]
+    fn dpi_commands_decode() {
+        let command: ProbeCommand =
+            serde_json::from_str(r#"{"type":"remeasure_dpi_hop"}"#).unwrap();
+        assert!(matches!(command, ProbeCommand::RemeasureDpiHop));
+        let command: ProbeCommand = serde_json::from_str(
+            r#"{"type":"sni_traceroute","host":"example.com","sni":"blocked.example"}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(command, ProbeCommand::SniTraceroute { host, sni, max_hops: 30 } if host == "example.com" && sni == "blocked.example")
+        );
+    }
+
     #[test]
     fn manual_commands_decode() {
         let command: ProbeCommand =
@@ -730,6 +904,14 @@ mod tests {
         assert_eq!(dpi.target_v4.to_string(), "203.0.113.10:443");
         assert_eq!(dpi.target_v6.to_string(), "[2001:db8::10]:443");
         assert_eq!(dpi.post_dpi_hop_limit, 3);
+        assert!(!dpi.accept_rst_fin_as_timeout);
+        assert!(!dpi.accept_ack_as_timeout);
+        let mut value = serde_json::to_value(dpi).unwrap();
+        value["accept_rst_fin_as_timeout"] = true.into();
+        value["accept_ack_as_timeout"] = true.into();
+        let dpi: DpiProbeConfig = serde_json::from_value(value).unwrap();
+        assert!(dpi.accept_rst_fin_as_timeout);
+        assert!(dpi.accept_ack_as_timeout);
     }
 
     #[test]
@@ -741,12 +923,42 @@ mod tests {
             bundle_type: Some("debian"),
             dpi_hop_v4: Some(4),
             dpi_hop_v6: Some(6),
+            dpi_hops_v4: vec![reports::probe::DpiProbeHop {
+                ttl: 1,
+                router: Some("192.0.2.1".parse().unwrap()),
+                outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+            }],
+            dpi_hops_v6: vec![
+                reports::probe::DpiProbeHop {
+                    ttl: 1,
+                    router: Some("2001:db8::1".parse().unwrap()),
+                    outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+                },
+                reports::probe::DpiProbeHop {
+                    ttl: 2,
+                    router: None,
+                    outcome: reports::probe::DpiProbeHopOutcome::TcpClosed,
+                },
+            ],
         };
         let value = serde_json::to_value(status).unwrap();
 
         assert_eq!(value["dpi_hop_v4"], 4);
         assert_eq!(value["dpi_hop_v6"], 6);
         assert_eq!(value["bundle_type"], "debian");
+        assert_eq!(
+            value["dpi_hops_v4"][0],
+            serde_json::json!({
+                "ttl": 1, "src": "192.0.2.1", "outcome": "icmp_time_exceeded"
+            })
+        );
+        assert_eq!(value["dpi_hops_v6"][0]["src"], "2001:db8::1");
+        assert_eq!(
+            value["dpi_hops_v6"][1],
+            serde_json::json!({
+                "ttl": 2, "src": null, "outcome": "tcp_closed"
+            })
+        );
     }
 
     #[test]
