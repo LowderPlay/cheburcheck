@@ -227,16 +227,22 @@ fn detect_platform() -> Result<(PackageKind, String, bool)> {
             .any(|line| line.split_whitespace().next() == Some("luci-app-cheburprobe"));
         Ok((PackageKind::Opkg, architecture.to_owned(), luci_installed))
     } else {
-        let architecture = match env::consts::ARCH {
-            "x86_64" => "amd64",
-            "aarch64" => "arm64",
-            architecture => bail!("unsupported standalone Linux architecture: {architecture}"),
-        };
+        let architecture = standalone_linux_architecture(env::consts::ARCH)?;
         Ok((PackageKind::Linux, architecture.to_owned(), false))
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
     bail!("updates are not supported on this operating system")
+}
+
+#[cfg(target_os = "linux")]
+fn standalone_linux_architecture(architecture: &str) -> Result<&'static str> {
+    match architecture {
+        "x86_64" => Ok("amd64"),
+        "aarch64" => Ok("arm64"),
+        "arm" => Ok("armv7"),
+        architecture => bail!("unsupported standalone Linux architecture: {architecture}"),
+    }
 }
 
 #[cfg(target_os = "linux")]
