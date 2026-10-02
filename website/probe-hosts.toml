@@ -11,6 +11,9 @@ connect_timeout_ms = 5000
 hop_timeout_ms = 1000
 max_ttl = 15
 post_dpi_hop_limit = 3
+# Continue DPI probing by treating TCP RST/FIN or payload ACK as timeouts.
+accept_rst_fin_as_timeout = false
+accept_ack_as_timeout = false
 
 [[hosts]]
 id = "hil-hetzner" # hil-speed.hetzner.com

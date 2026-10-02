@@ -81,6 +81,8 @@ pub struct ProbeStatusSnapshot {
     pub bundle_type: Option<String>,
     pub dpi_hop_v4: Option<u8>,
     pub dpi_hop_v6: Option<u8>,
+    pub dpi_hops_v4: Vec<reports::probe::DpiProbeHop>,
+    pub dpi_hops_v6: Vec<reports::probe::DpiProbeHop>,
 }
 
 #[derive(Deserialize)]
@@ -280,6 +282,23 @@ impl MqttPublisher {
         command: ProbeCommand,
     ) -> Result<ProbeCommandResult, PublishError> {
         let client = self.client.as_ref().ok_or(PublishError::NotConfigured)?;
+        let timeout = match &command {
+            ProbeCommand::SniTraceroute { max_hops, .. } => {
+                Duration::from_secs(70 + u64::from(*max_hops) * 7)
+            }
+            ProbeCommand::RemeasureDpiHop => {
+                let config = self.probe_config.read().await;
+                Duration::from_millis(config.dpi_probe.as_ref().map_or(60_000, |dpi| {
+                    60_000
+                        + u64::from(dpi.max_ttl)
+                            * (dpi
+                                .connect_timeout_ms
+                                .saturating_add(dpi.hop_timeout_ms)
+                                .saturating_add(100))
+                }))
+            }
+            _ => Duration::from_secs(60),
+        };
         let command_id = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = rocket::tokio::sync::oneshot::channel();
         self.command_sessions
@@ -299,7 +318,7 @@ impl MqttPublisher {
             self.command_sessions.lock().await.remove(&command_id);
             return Err(PublishError::Publish(error));
         }
-        let result = rocket::tokio::time::timeout(Duration::from_secs(60), receiver).await;
+        let result = rocket::tokio::time::timeout(timeout, receiver).await;
         self.command_sessions.lock().await.remove(&command_id);
         result
             .ok()
@@ -474,6 +493,8 @@ async fn dispatch_probe_status(probe_statuses: &ProbeStatuses, topic: &str, payl
             bundle_type: status.bundle_type.map(str::to_string),
             dpi_hop_v4: status.dpi_hop_v4,
             dpi_hop_v6: status.dpi_hop_v6,
+            dpi_hops_v4: status.dpi_hops_v4,
+            dpi_hops_v6: status.dpi_hops_v6,
         },
     );
 }
@@ -580,6 +601,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn global_dpi_timeout_options_survive_config_parsing() {
+        let contents = r#"
+timeout_sec = 3
+min_data = 65536
+hosts = []
+[dpi_probe]
+sni = "example.com"
+target_v4 = "192.0.2.1:443"
+target_v6 = "[2001:db8::1]:443"
+connect_timeout_ms = 5000
+hop_timeout_ms = 1000
+max_ttl = 15
+"#;
+        let config = parse_probe_hosts(contents).unwrap();
+        let dpi = config.dpi_probe.unwrap();
+        assert!(!dpi.accept_rst_fin_as_timeout);
+        assert!(!dpi.accept_ack_as_timeout);
+
+        let enabled =
+            format!("{contents}\naccept_rst_fin_as_timeout = true\naccept_ack_as_timeout = true\n");
+        let config = parse_probe_hosts(&enabled).unwrap();
+        let payload = serde_json::to_value(config.dpi_probe.unwrap()).unwrap();
+        assert_eq!(payload["accept_rst_fin_as_timeout"], true);
+        assert_eq!(payload["accept_ack_as_timeout"], true);
+    }
+
+    #[test]
     fn update_check_uses_global_or_targeted_topic() {
         assert_eq!(probe_update_topic(None), "probe/update/v1");
         assert_eq!(probe_update_topic(Some("42")), "probe/update/v1/42");
@@ -620,7 +668,36 @@ mod tests {
                 bundle_type: Some("openwrt".to_string()),
                 dpi_hop_v4: Some(4),
                 dpi_hop_v6: Some(6),
+                dpi_hops_v4: Vec::new(),
+                dpi_hops_v6: Vec::new(),
             })
+        );
+    }
+
+    #[rocket::async_test]
+    async fn status_snapshot_keeps_invalid_dpi_measurement_hops() {
+        let statuses = Arc::new(rocket::tokio::sync::RwLock::new(HashMap::new()));
+        dispatch_probe_status(
+            &statuses,
+            "probe/status/v1/42",
+            br#"{"online":true,"probe_id":"42","version":"1.2.3","dpi_hop_v4":null,"dpi_hops_v4":[{"ttl":1,"src":"192.0.2.1","outcome":"icmp_time_exceeded"},{"ttl":2,"src":null,"outcome":"tcp_closed"}],"dpi_hops_v6":[{"ttl":1,"src":"2001:db8::1","outcome":"icmp_time_exceeded"}]}"#,
+        ).await;
+        let statuses = statuses.read().await;
+        let status = statuses.get("42").unwrap();
+        assert_eq!(status.dpi_hop_v4, None);
+        assert_eq!(status.dpi_hops_v4.len(), 2);
+        assert_eq!(
+            status.dpi_hops_v4[0].router,
+            Some("192.0.2.1".parse().unwrap())
+        );
+        assert_eq!(
+            status.dpi_hops_v4[1].outcome,
+            reports::probe::DpiProbeHopOutcome::TcpClosed
+        );
+        assert_eq!(status.dpi_hops_v4[1].router, None);
+        assert_eq!(
+            status.dpi_hops_v6[0].router,
+            Some("2001:db8::1".parse().unwrap())
         );
     }
 
@@ -634,6 +711,8 @@ mod tests {
                 bundle_type: None,
                 dpi_hop_v4: None,
                 dpi_hop_v6: None,
+                dpi_hops_v4: Vec::new(),
+                dpi_hops_v6: Vec::new(),
             },
         )])));
 

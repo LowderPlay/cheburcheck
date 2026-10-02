@@ -12,6 +12,35 @@ pub struct ProbeStatus<'a> {
     pub dpi_hop_v4: Option<u8>,
     #[serde(default)]
     pub dpi_hop_v6: Option<u8>,
+    #[serde(default)]
+    pub dpi_hops_v4: Vec<DpiProbeHop>,
+    #[serde(default)]
+    pub dpi_hops_v6: Vec<DpiProbeHop>,
+}
+
+/// One attempted DPI-probe TTL, including unsuccessful measurements.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DpiProbeHop {
+    pub ttl: u8,
+    /// Observed ICMP response source; absent when no packet source was captured.
+    #[serde(rename = "src")]
+    pub router: Option<IpAddr>,
+    pub outcome: DpiProbeHopOutcome,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DpiProbeHopOutcome {
+    IcmpTimeExceeded,
+    Timeout,
+    TcpClosed,
+    TcpAcknowledged,
+}
+
+impl DpiProbeHopOutcome {
+    pub const fn invalidates_measurement(self) -> bool {
+        matches!(self, Self::TcpClosed | Self::TcpAcknowledged)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,6 +69,12 @@ pub struct DpiProbeConfig {
     pub max_ttl: u8,
     #[serde(default = "default_post_dpi_hop_limit")]
     pub post_dpi_hop_limit: u8,
+    /// Treat TCP RST/FIN as a timeout and continue measuring later TTLs.
+    #[serde(default)]
+    pub accept_rst_fin_as_timeout: bool,
+    /// Treat an acknowledged payload as a timeout and continue measuring later TTLs.
+    #[serde(default)]
+    pub accept_ack_as_timeout: bool,
 }
 
 pub const fn default_post_dpi_hop_limit() -> u8 {
@@ -161,6 +196,13 @@ pub enum ProbeCommand {
         max_hops: u8,
     },
     ResubscribeTasks,
+    RemeasureDpiHop,
+    SniTraceroute {
+        host: String,
+        sni: String,
+        #[serde(default = "default_manual_max_hops")]
+        max_hops: u8,
+    },
 }
 
 pub const fn default_manual_max_hops() -> u8 {
@@ -176,6 +218,19 @@ pub enum ProbeCommandResult {
     },
     ResubscribeTasks {
         requested: bool,
+    },
+    RemeasureDpiHop {
+        dpi_hop_v4: Option<u8>,
+        dpi_hop_v6: Option<u8>,
+        dpi_hops_v4: Vec<DpiProbeHop>,
+        dpi_hops_v6: Vec<DpiProbeHop>,
+    },
+    SniTraceroute {
+        host: String,
+        sni: String,
+        target: std::net::SocketAddr,
+        dpi_hop: Option<u8>,
+        hops: Vec<DpiProbeHop>,
     },
     Error {
         message: String,
@@ -221,4 +276,63 @@ pub enum ProbeEvidence {
     ClientHello,
     DataTimeout { bytes: u32 },
     Good,
+}
+
+/// Manual SNI traces accept a bare hostname or IP and a DNS SNI, on port 443.
+pub fn validate_sni_traceroute(host: &str, sni: &str) -> Result<(), &'static str> {
+    fn dns_name(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 253
+            && value
+                .strip_suffix('.')
+                .unwrap_or(value)
+                .split('.')
+                .all(|label| {
+                    !label.is_empty()
+                        && label.len() <= 63
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+    }
+    if host.parse::<IpAddr>().is_err() && !dns_name(host) {
+        return Err("host must be a bare hostname or IP address");
+    }
+    if sni.parse::<IpAddr>().is_ok() || !dns_name(sni) {
+        return Err("sni must be a DNS name");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn validates_separate_host_and_sni() {
+        for host in ["example.com", "192.0.2.1", "2001:db8::1"] {
+            assert!(validate_sni_traceroute(host, "blocked.example").is_ok());
+        }
+        for host in [
+            "",
+            "https://example.com",
+            "example.com:443",
+            "bad host",
+            "-invalid.example",
+        ] {
+            assert!(validate_sni_traceroute(host, "blocked.example").is_err());
+        }
+        for sni in [
+            "",
+            "192.0.2.1",
+            "bad/name",
+            "bad..name",
+            "bad_.name",
+            "bad...",
+        ] {
+            assert!(validate_sni_traceroute("example.com", sni).is_err());
+        }
+    }
 }

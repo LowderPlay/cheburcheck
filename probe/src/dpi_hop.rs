@@ -22,6 +22,8 @@ pub struct DpiHopProbeConfig {
     pub max_ttl: u8,
     pub connect_timeout: Duration,
     pub hop_timeout: Duration,
+    pub accept_rst_fin_as_timeout: bool,
+    pub accept_ack_as_timeout: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,26 +35,9 @@ pub struct DpiHopProbeResult {
     pub hops: Vec<DpiHopProbeHop>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DpiHopProbeHop {
-    pub ttl: u8,
-    pub router: Option<IpAddr>,
-    pub outcome: DpiHopProbeHopOutcome,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DpiHopProbeHopOutcome {
-    IcmpTimeExceeded,
-    Timeout,
-    TcpClosed,
-    TcpAcknowledged,
-}
-
-impl DpiHopProbeHopOutcome {
-    pub const fn invalidates_measurement(self) -> bool {
-        matches!(self, Self::TcpClosed | Self::TcpAcknowledged)
-    }
-}
+pub use reports::probe::{
+    DpiProbeHop as DpiHopProbeHop, DpiProbeHopOutcome as DpiHopProbeHopOutcome,
+};
 
 pub async fn detect_dpi_hop(config: DpiHopProbeConfig) -> io::Result<DpiHopProbeResult> {
     tokio::task::spawn_blocking(move || detect_dpi_hop_blocking(config))
@@ -89,6 +74,7 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         // affect later hops.
         let mut tcp = TcpStream::connect_timeout(&config.target, config.connect_timeout)?;
         tcp.set_nodelay(true)?;
+        tcp.set_write_timeout(Some(config.connect_timeout))?;
         let local_addr = tcp.local_addr()?;
         if !same_ip_family(local_addr, config.target) {
             return Err(io::Error::other(
@@ -128,14 +114,19 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
-                outcome: DpiHopProbeHopOutcome::TcpClosed,
+                outcome: classify_hop(None, true, false, &config),
             });
+            if config.accept_rst_fin_as_timeout {
+                continue;
+            }
             break;
         }
 
         let router =
             listen_for_time_exceeded(&icmp, local_addr, config.target, config.hop_timeout)?;
-        let outcome = classify_hop(router, peer_closed(&tcp)?, tcp_payload_acknowledged(&tcp)?);
+        let closed = peer_closed(&tcp)?;
+        let acknowledged = !closed && tcp_payload_acknowledged(&tcp)?;
+        let outcome = classify_hop(router, closed, acknowledged, &config);
         if outcome == DpiHopProbeHopOutcome::IcmpTimeExceeded {
             max_icmp_time_exceeded_ttl = Some(ttl);
         }
@@ -278,13 +269,22 @@ fn classify_hop(
     router: Option<IpAddr>,
     peer_closed: bool,
     payload_acknowledged: bool,
+    config: &DpiHopProbeConfig,
 ) -> DpiHopProbeHopOutcome {
     if router.is_some() {
         DpiHopProbeHopOutcome::IcmpTimeExceeded
     } else if peer_closed {
-        DpiHopProbeHopOutcome::TcpClosed
+        if config.accept_rst_fin_as_timeout {
+            DpiHopProbeHopOutcome::Timeout
+        } else {
+            DpiHopProbeHopOutcome::TcpClosed
+        }
     } else if payload_acknowledged {
-        DpiHopProbeHopOutcome::TcpAcknowledged
+        if config.accept_ack_as_timeout {
+            DpiHopProbeHopOutcome::Timeout
+        } else {
+            DpiHopProbeHopOutcome::TcpAcknowledged
+        }
     } else {
         DpiHopProbeHopOutcome::Timeout
     }
@@ -470,10 +470,22 @@ fn matching_quoted_tcp_tuple(packet: &[u8], local_addr: SocketAddr, target: Sock
 mod tests {
     use super::*;
 
+    fn probe_config() -> DpiHopProbeConfig {
+        DpiHopProbeConfig {
+            target: "192.0.2.1:443".parse().unwrap(),
+            control_sni: "example.com".into(),
+            max_ttl: 15,
+            connect_timeout: Duration::from_secs(5),
+            hop_timeout: Duration::from_secs(1),
+            accept_rst_fin_as_timeout: false,
+            accept_ack_as_timeout: false,
+        }
+    }
+
     #[test]
     fn acknowledged_payload_marks_direct_tcp_delivery() {
         assert_eq!(
-            classify_hop(None, false, true),
+            classify_hop(None, false, true, &probe_config()),
             DpiHopProbeHopOutcome::TcpAcknowledged
         );
         assert!(DpiHopProbeHopOutcome::TcpAcknowledged.invalidates_measurement());
@@ -482,9 +494,49 @@ mod tests {
     #[test]
     fn icmp_response_takes_precedence_over_tcp_state() {
         assert_eq!(
-            classify_hop(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), true, true),
+            classify_hop(
+                Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+                true,
+                true,
+                &probe_config()
+            ),
             DpiHopProbeHopOutcome::IcmpTimeExceeded
         );
+    }
+
+    #[test]
+    fn tcp_timeout_options_are_independent_and_preserve_icmp_precedence() {
+        for accept_rst_fin_as_timeout in [false, true] {
+            for accept_ack_as_timeout in [false, true] {
+                let config = DpiHopProbeConfig {
+                    accept_rst_fin_as_timeout,
+                    accept_ack_as_timeout,
+                    ..probe_config()
+                };
+                let closed = if accept_rst_fin_as_timeout {
+                    DpiHopProbeHopOutcome::Timeout
+                } else {
+                    DpiHopProbeHopOutcome::TcpClosed
+                };
+                let acknowledged = if accept_ack_as_timeout {
+                    DpiHopProbeHopOutcome::Timeout
+                } else {
+                    DpiHopProbeHopOutcome::TcpAcknowledged
+                };
+                assert_eq!(classify_hop(None, true, false, &config), closed);
+                assert_eq!(classify_hop(None, true, true, &config), closed);
+                assert_eq!(classify_hop(None, false, true, &config), acknowledged);
+                assert_eq!(
+                    classify_hop(None, false, false, &config),
+                    DpiHopProbeHopOutcome::Timeout
+                );
+                assert_eq!(
+                    classify_hop(Some(IpAddr::V4(Ipv4Addr::LOCALHOST)), true, true, &config),
+                    DpiHopProbeHopOutcome::IcmpTimeExceeded
+                );
+                assert!(!DpiHopProbeHopOutcome::Timeout.invalidates_measurement());
+            }
+        }
     }
 
     #[test]

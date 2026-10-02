@@ -59,6 +59,10 @@ pub struct ProbeRow {
     bundle_type: Option<String>,
     dpi_hop_v4: Option<i16>,
     dpi_hop_v6: Option<i16>,
+    #[sqlx(skip)]
+    dpi_hops_v4: Vec<reports::probe::DpiProbeHop>,
+    #[sqlx(skip)]
+    dpi_hops_v6: Vec<reports::probe::DpiProbeHop>,
 }
 
 async fn rows(pool: &PgPool, mqtt: &MqttPublisher) -> Result<Vec<ProbeRow>, Status> {
@@ -78,6 +82,8 @@ async fn rows(pool: &PgPool, mqtt: &MqttPublisher) -> Result<Vec<ProbeRow>, Stat
             bundle_type,
             dpi_hop_v4,
             dpi_hop_v6,
+            dpi_hops_v4,
+            dpi_hops_v6,
         }) = statuses.get(&row.id.to_string())
         {
             row.online = *online;
@@ -85,6 +91,8 @@ async fn rows(pool: &PgPool, mqtt: &MqttPublisher) -> Result<Vec<ProbeRow>, Stat
             row.bundle_type = bundle_type.clone();
             row.dpi_hop_v4 = dpi_hop_v4.map(i16::from);
             row.dpi_hop_v6 = dpi_hop_v6.map(i16::from);
+            row.dpi_hops_v4 = dpi_hops_v4.clone();
+            row.dpi_hops_v6 = dpi_hops_v6.clone();
         }
     }
     Ok(rows)
@@ -273,7 +281,16 @@ pub async fn update_one_probe(
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandInput {
     ResubscribeTasks,
-    Traceroute { target: IpAddr, max_hops: u8 },
+    RemeasureDpiHop,
+    SniTraceroute {
+        host: String,
+        sni: String,
+        max_hops: u8,
+    },
+    Traceroute {
+        target: IpAddr,
+        max_hops: u8,
+    },
 }
 
 #[post("/probes/<id>/commands", format = "json", data = "<input>")]
@@ -294,6 +311,25 @@ pub async fn command(
     }
     let command = match input.into_inner() {
         CommandInput::ResubscribeTasks => ProbeCommand::ResubscribeTasks,
+        CommandInput::RemeasureDpiHop => ProbeCommand::RemeasureDpiHop,
+        CommandInput::SniTraceroute {
+            host,
+            sni,
+            max_hops,
+        } => {
+            let host = host.trim().to_owned();
+            let sni = sni.trim().to_owned();
+            if !(1..=64).contains(&max_hops)
+                || reports::probe::validate_sni_traceroute(&host, &sni).is_err()
+            {
+                return Err(Status::BadRequest);
+            }
+            ProbeCommand::SniTraceroute {
+                host,
+                sni,
+                max_hops,
+            }
+        }
         CommandInput::Traceroute { target, max_hops } if (1..=64).contains(&max_hops) => {
             ProbeCommand::Traceroute { target, max_hops }
         }

@@ -59,6 +59,8 @@ struct NodeStatus {
     bundle_type: Option<String>,
     dpi_hop_v4: Option<u8>,
     dpi_hop_v6: Option<u8>,
+    dpi_hops_v4: Vec<reports::probe::DpiProbeHop>,
+    dpi_hops_v6: Vec<reports::probe::DpiProbeHop>,
 }
 
 #[get("/nodes")]
@@ -111,6 +113,12 @@ fn build_node_statuses(
                 bundle_type: status.and_then(|status| status.bundle_type.clone()),
                 dpi_hop_v4: status.and_then(|status| status.dpi_hop_v4),
                 dpi_hop_v6: status.and_then(|status| status.dpi_hop_v6),
+                dpi_hops_v4: status
+                    .map(|status| status.dpi_hops_v4.clone())
+                    .unwrap_or_default(),
+                dpi_hops_v6: status
+                    .map(|status| status.dpi_hops_v6.clone())
+                    .unwrap_or_default(),
             }
         })
         .collect()
@@ -131,6 +139,11 @@ mod tests {
 
     #[test]
     fn builds_online_and_offline_json_nodes() {
+        let hops = vec![reports::probe::DpiProbeHop {
+            ttl: 1,
+            router: Some("192.0.2.1".parse().unwrap()),
+            outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+        }];
         let probes = vec![
             ProbeMetadata {
                 id: 1,
@@ -157,6 +170,8 @@ mod tests {
                 bundle_type: Some("debian".to_string()),
                 dpi_hop_v4: Some(5),
                 dpi_hop_v6: None,
+                dpi_hops_v4: hops.clone(),
+                dpi_hops_v6: Vec::new(),
             },
         )]);
 
@@ -177,6 +192,8 @@ mod tests {
                     bundle_type: Some("debian".to_string()),
                     dpi_hop_v4: Some(5),
                     dpi_hop_v6: None,
+                    dpi_hops_v4: hops.clone(),
+                    dpi_hops_v6: Vec::new(),
                 },
                 NodeStatus {
                     probe_id: 2,
@@ -190,6 +207,8 @@ mod tests {
                     bundle_type: None,
                     dpi_hop_v4: None,
                     dpi_hop_v6: None,
+                    dpi_hops_v4: Vec::new(),
+                    dpi_hops_v6: Vec::new(),
                 },
             ]
         );
