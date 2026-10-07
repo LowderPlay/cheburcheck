@@ -63,7 +63,7 @@ export const russiaTilePositions: Partial<
 	"RU-TY": [13, 5, "ТЫВ"],
 	"RU-ZAB": [14, 5, "ЗАБ"],
 	"RU-PRI": [16, 5, "ПРИ"],
-	"RU-KRS": [3, 6, "КРС"],
+	"RU-KUR": [3, 6, "КУР"],
 	"RU-LIP": [4, 6, "ЛИП"],
 	"RU-TAM": [5, 6, "ТАМ"],
 	"RU-PNZ": [6, 6, "ПЕН"],
