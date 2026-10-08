@@ -95,7 +95,7 @@ const chartProps = {
 	</p>
 	<!-- biome-ignore format: code block -->
 	<KbCode>
-$ curl -k https://cheburcheck.ru/100MB.bin -o/dev/null -r 0-65536 --resolve cheburcheck.ru:443:5.78.7.195 --max-time 5
+$ curl -k https://cheburcheck.ru/100MB.bin -o/dev/null -r 0-65536 --connect-to ::5.78.7.195:443 --max-time 5
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
  24 65537   24 16101    0     0   3220      0  0:00:20  0:00:04  0:00:16     0
@@ -114,7 +114,7 @@ curl: (28) Operation timed out after 5000 milliseconds with 16101 out of 65537 b
 	</p>
 	<!-- biome-ignore format: code block -->
 	<KbCode>
-$ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.78.7.195
+$ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --connect-to ::5.78.7.195:443
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
 100 65537  100 65537    0     0  55226      0  0:00:01  0:00:01 --:--:-- 55258
@@ -125,7 +125,7 @@ $ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.7
 	</p>
 	<!-- biome-ignore format: code block -->
 	<KbCode>
-$ curl -k https://ok.ru/100MB.bin -o/dev/null -r 0-65536 --resolve ok.ru:443:5.78.7.195
+$ curl -k https://cheburcheck.ok.ru/100MB.bin -o/dev/null -r 0-65536 --connect-to ::5.78.7.195:443
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
 100 65537  100 65537    0     0  55226      0  0:00:01  0:00:01 --:--:-- 55258
