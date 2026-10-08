@@ -26,6 +26,40 @@ pub struct DpiProbeHop {
     #[serde(rename = "src")]
     pub router: Option<IpAddr>,
     pub outcome: DpiProbeHopOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_diagnostics: Option<TcpDiagnostics>,
+}
+
+/// Incoming TCP headers observed during one manual hop attempt. No payload is retained.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct TcpDiagnostics {
+    pub packets: Vec<TcpPacketMetadata>,
+    pub capture_error: Option<String>,
+    pub truncated: bool,
+    pub connect_error: Option<String>,
+    pub send_error: Option<String>,
+    pub client_hello_sent_ms: Option<u64>,
+    pub junk_sent_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TcpPacketMetadata {
+    /// Approximate observation time relative to the start of this hop's capture.
+    pub observed_ms: u64,
+    pub source: std::net::SocketAddr,
+    pub destination: std::net::SocketAddr,
+    /// Absent when the platform's raw IPv6 socket omits the IP header.
+    pub ttl: Option<u8>,
+    pub ip_id: Option<u16>,
+    pub sequence: u32,
+    pub acknowledgment: u32,
+    pub window: u16,
+    pub flags: Vec<String>,
+    pub timestamp: Option<u32>,
+    pub timestamp_echo: Option<u32>,
+    pub options_hex: String,
+    pub payload_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +277,8 @@ pub struct ManualTracerouteHop {
     pub address: Option<IpAddr>,
     pub reverse_names: Vec<String>,
     pub outcome: ManualTracerouteOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_diagnostics: Option<TcpDiagnostics>,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]

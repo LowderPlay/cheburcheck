@@ -1,3 +1,4 @@
+use crate::packet_capture::{TcpCapture, connect_with_port};
 use etherparse::{
     Icmpv4Type, Icmpv6Slice, Icmpv6Type, IpNumber, LaxNetSlice, LaxSlicedPacket, TransportSlice,
     icmpv4, icmpv6,
@@ -24,6 +25,7 @@ pub struct DpiHopProbeConfig {
     pub hop_timeout: Duration,
     pub accept_rst_fin_as_timeout: bool,
     pub accept_ack_as_timeout: bool,
+    pub collect_tcp_metadata: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +74,38 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         // subsequently changed socket TTL. Use an independent connection for
         // every TTL so each hop corresponds to an actual packet and cannot
         // affect later hops.
-        let mut tcp = TcpStream::connect_timeout(&config.target, config.connect_timeout)?;
+        let capture = config
+            .collect_tcp_metadata
+            .then(|| TcpCapture::start(config.target));
+        let (port, connection) = if capture.is_some() {
+            connect_with_port(config.target, config.connect_timeout)
+        } else {
+            (
+                None,
+                TcpStream::connect_timeout(&config.target, config.connect_timeout),
+            )
+        };
+        let mut tcp = match connection {
+            Ok(tcp) => tcp,
+            Err(error) => {
+                let Some(capture) = capture else {
+                    return Err(error);
+                };
+                let mut diagnostics = capture.finish(&port.into_iter().collect::<Vec<_>>());
+                diagnostics.connect_error = Some(error.to_string());
+                hops.push(DpiHopProbeHop {
+                    ttl,
+                    router: None,
+                    outcome: if error.kind() == io::ErrorKind::ConnectionRefused {
+                        DpiHopProbeHopOutcome::TcpClosed
+                    } else {
+                        DpiHopProbeHopOutcome::Timeout
+                    },
+                    tcp_diagnostics: Some(diagnostics),
+                });
+                break;
+            }
+        };
         tcp.set_nodelay(true)?;
         tcp.set_write_timeout(Some(config.connect_timeout))?;
         let local_addr = tcp.local_addr()?;
@@ -97,24 +130,50 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             result_local_addr = Some(local_addr);
             client_hello_bytes = Some(client_hello.len());
         }
-        tcp.write_all(&client_hello)?;
-
-        // A blocking DPI may silently discard the ClientHello, so waiting for
-        // a TCP acknowledgement would deadlock the measurement. Give the DPI
-        // a short interval to classify this new flow before sending the
-        // TTL-limited payload instead. This is needed for every attempt because
-        // each TTL deliberately uses a fresh TCP connection.
+        // Classify the flow with a normal-TTL ClientHello. Limiting this first
+        // packet triggers low-TTL filtering even for control SNI on some paths.
+        let hello_sent_ms = capture.as_ref().map(TcpCapture::elapsed_ms);
+        if let Err(error) = tcp.write_all(&client_hello) {
+            if capture.is_none() {
+                return Err(error);
+            }
+            // Continue observing after a fast reset to catch competing server
+            // packets as well. Automatic measurements retain their old behavior.
+            std::thread::sleep(config.hop_timeout);
+            let mut diagnostics = finish_capture(capture, local_addr, hello_sent_ms, None);
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.send_error = Some(error.to_string());
+            }
+            hops.push(DpiHopProbeHop {
+                ttl,
+                router: None,
+                outcome: if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) {
+                    DpiHopProbeHopOutcome::TcpClosed
+                } else {
+                    DpiHopProbeHopOutcome::Timeout
+                },
+                tcp_diagnostics: diagnostics,
+            });
+            break;
+        }
         std::thread::sleep(DPI_CLASSIFICATION_DELAY);
         drain_socket(&icmp)?;
-
         let mut payload = [0u8; PROBE_BYTES];
         rand::thread_rng().fill_bytes(&mut payload);
-
-        if !send_with_ttl(&mut tcp, config.target, &payload, ttl)? {
+        let junk_sent_ms = capture.as_ref().map(TcpCapture::elapsed_ms);
+        let payload_sent = send_with_ttl(&mut tcp, config.target, &payload, ttl)?;
+        if !payload_sent {
+            if capture.is_some() {
+                std::thread::sleep(config.hop_timeout);
+            }
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
                 outcome: classify_hop(None, true, false, &config),
+                tcp_diagnostics: finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms),
             });
             if config.accept_rst_fin_as_timeout {
                 continue;
@@ -134,6 +193,7 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             ttl,
             router,
             outcome,
+            tcp_diagnostics: finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms),
         });
         if outcome.invalidates_measurement() {
             break;
@@ -142,12 +202,39 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
 
     Ok(DpiHopProbeResult {
         target: config.target,
-        local_addr: result_local_addr
-            .ok_or_else(|| io::Error::other("DPI hop probe made no TTL attempts"))?,
-        client_hello_bytes: client_hello_bytes
-            .ok_or_else(|| io::Error::other("DPI hop probe produced no ClientHello"))?,
+        local_addr: result_local_addr.unwrap_or_else(|| {
+            SocketAddr::new(
+                if config.target.is_ipv4() {
+                    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+                } else {
+                    IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED)
+                },
+                0,
+            )
+        }),
+        client_hello_bytes: client_hello_bytes.unwrap_or(0),
         max_icmp_time_exceeded_ttl,
         hops,
+    })
+}
+
+fn finish_capture(
+    capture: Option<TcpCapture>,
+    local: SocketAddr,
+    hello_ms: Option<u64>,
+    junk_ms: Option<u64>,
+) -> Option<reports::probe::TcpDiagnostics> {
+    capture.map(|capture| {
+        let mut diagnostics = capture.finish(&[local.port()]);
+        for packet in &mut diagnostics.packets {
+            // Raw IPv6 sockets may omit the destination IP header.
+            if packet.destination.ip().is_unspecified() {
+                packet.destination.set_ip(local.ip());
+            }
+        }
+        diagnostics.client_hello_sent_ms = hello_ms;
+        diagnostics.junk_sent_ms = junk_ms;
+        diagnostics
     })
 }
 
@@ -470,6 +557,72 @@ fn matching_quoted_tcp_tuple(packet: &[u8], local_addr: SocketAddr, target: Sock
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires CAP_NET_RAW and local socket access"]
+    fn live_clienthello_keeps_default_ttl_and_junk_uses_tested_ttl() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = listener.local_addr().unwrap();
+        let hello_len = make_client_hello("example.com").unwrap().len();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut hello = vec![0; hello_len];
+            stream.read_exact(&mut hello).unwrap();
+            assert_eq!(hello[0], 22); // TLS handshake record
+            let mut junk = [0; PROBE_BYTES];
+            stream.read_exact(&mut junk).unwrap();
+            stream.write_all(b"response").unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+        });
+        let receiver = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP)).unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let observer = std::thread::spawn(move || {
+            let mut packets = Vec::new();
+            let mut buffer = [0; 65535];
+            while packets.len() < 2 {
+                let (bytes, _) = recv_socket(&receiver, &mut buffer).unwrap();
+                let packet = LaxSlicedPacket::from_ip(&buffer[..bytes]).unwrap();
+                if let (Some(LaxNetSlice::Ipv4(ip)), Some(TransportSlice::Tcp(tcp))) =
+                    (packet.net, packet.transport)
+                {
+                    if tcp.destination_port() == target.port() && !tcp.payload().is_empty() {
+                        packets.push((ip.header().ttl(), tcp.payload().len()));
+                    }
+                }
+            }
+            packets
+        });
+        let default_ttl = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+            .unwrap()
+            .ttl_v4()
+            .unwrap() as u8;
+        let trace = detect_dpi_hop_blocking(DpiHopProbeConfig {
+            target,
+            max_ttl: 1,
+            hop_timeout: Duration::from_millis(100),
+            collect_tcp_metadata: true,
+            ..probe_config()
+        })
+        .unwrap();
+        let packets = observer.join().unwrap();
+        server.join().unwrap();
+        assert_eq!(packets, [(default_ttl, hello_len), (1, PROBE_BYTES)]);
+        let metadata = trace.hops[0].tcp_diagnostics.as_ref().unwrap();
+        assert_eq!(metadata.capture_error, None);
+        assert!(
+            metadata
+                .packets
+                .iter()
+                .any(|p| p.flags.contains(&"SYN".into()))
+        );
+        assert!(metadata.junk_sent_ms.unwrap() >= metadata.client_hello_sent_ms.unwrap() + 100);
+    }
+
     fn probe_config() -> DpiHopProbeConfig {
         DpiHopProbeConfig {
             target: "192.0.2.1:443".parse().unwrap(),
@@ -479,6 +632,7 @@ mod tests {
             hop_timeout: Duration::from_secs(1),
             accept_rst_fin_as_timeout: false,
             accept_ack_as_timeout: false,
+            collect_tcp_metadata: false,
         }
     }
 

@@ -39,8 +39,38 @@ type Hop = {
 	address: string | null;
 	reverse_names: string[];
 	outcome: string;
+	tcp_diagnostics?: TcpDiagnostics;
 };
-type DpiHop = { ttl: number; src: string | null; outcome: string };
+type TcpPacket = {
+	observed_ms: number;
+	source: string;
+	destination: string;
+	ttl: number | null;
+	ip_id: number | null;
+	sequence: number;
+	acknowledgment: number;
+	window: number;
+	flags: string[];
+	timestamp: number | null;
+	timestamp_echo: number | null;
+	options_hex: string;
+	payload_bytes: number;
+};
+type TcpDiagnostics = {
+	packets: TcpPacket[];
+	capture_error: string | null;
+	connect_error: string | null;
+	send_error: string | null;
+	truncated: boolean;
+	client_hello_sent_ms: number | null;
+	junk_sent_ms: number | null;
+};
+type DpiHop = {
+	ttl: number;
+	src: string | null;
+	outcome: string;
+	tcp_diagnostics?: TcpDiagnostics;
+};
 type CommandType =
 	| "resubscribe_tasks"
 	| "traceroute"
@@ -393,6 +423,90 @@ const outcomeLabel: Record<string, string> = {
 };
 </script>
 
+{#snippet tcpDiagnostics(diagnostics: TcpDiagnostics | undefined)}
+	{#if diagnostics}
+		<details
+			class="mt-2 rounded-lg border border-neutral-700 p-3 text-xs"
+			open={diagnostics.packets.some((packet) => packet.flags.includes("RST") || packet.flags.includes("FIN"))}
+		>
+			<summary class="cursor-pointer text-neutral-300">
+				TCP: {diagnostics.packets.length} входящих пакетов{diagnostics.truncated ? " (список сокращён)" : ""}
+			</summary>
+			{#if diagnostics.capture_error}
+				<p class="mt-2 text-amber-300">
+					Ошибка захвата: {diagnostics.capture_error}
+				</p>
+			{/if}
+			{#if diagnostics.connect_error}
+				<p class="mt-2 text-amber-300">
+					Ошибка соединения: {diagnostics.connect_error}
+				</p>
+			{/if}
+			{#if diagnostics.send_error}
+				<p class="mt-2 text-amber-300">
+					Ошибка отправки: {diagnostics.send_error}
+				</p>
+			{/if}
+			<p class="mt-2 text-neutral-400">
+				Время приблизительное, от начала захвата.
+				{#if diagnostics.client_hello_sent_ms !== null}
+					ClientHello: {diagnostics.client_hello_sent_ms} мс; данные:
+					{diagnostics.junk_sent_ms ?? "—"}
+					мс.
+				{/if}
+				Δ TTL сравнивает пакет с SYN-ACK того же соединения; это не расстояние
+				до DPI.
+			</p>
+			<div class="mt-3 overflow-x-auto">
+				<table class="w-full whitespace-nowrap text-left font-mono">
+					<thead class="text-neutral-500">
+						<tr>
+							<th class="pr-4">мс</th>
+							<th class="pr-4">Источник → цель</th>
+							<th class="pr-4">Флаги</th>
+							<th class="pr-4">TTL / Δ</th>
+							<th class="pr-4">SEQ / ACK</th>
+							<th class="pr-4">Окно / IP ID</th>
+							<th class="pr-4">TS / echo</th>
+							<th>Байты / опции</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each diagnostics.packets as packet}
+							{@const baseline = diagnostics.packets.find((p) => p.destination === packet.destination && p.flags.includes("SYN") && p.flags.includes("ACK"))}
+							<tr
+								class="border-t border-neutral-800"
+								class:text-amber-300={packet.flags.includes("RST") || packet.flags.includes("FIN")}
+							>
+								<td class="py-2 pr-4">{packet.observed_ms}</td>
+								<td class="pr-4">{packet.source} → {packet.destination}</td>
+								<td class="pr-4">{packet.flags.join(" ") || "—"}</td>
+								<td class="pr-4">
+									{packet.ttl ?? "—"}
+									/
+									{packet.ttl !== null && baseline?.ttl != null ? packet.ttl - baseline.ttl : "—"}
+								</td>
+								<td class="pr-4">{packet.sequence}/ {packet.acknowledgment}</td>
+								<td class="pr-4">{packet.window} / {packet.ip_id ?? "—"}</td>
+								<td class="pr-4">
+									{packet.timestamp ?? "—"}
+									/ {packet.timestamp_echo ?? "—"}
+								</td>
+								<td>{packet.payload_bytes} / {packet.options_hex || "—"}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			{#if diagnostics.packets.some((p) => p.ttl === null)}
+				<p class="mt-2 text-neutral-500">
+					Для части пакетов IP-заголовок недоступен; TTL не измерен.
+				</p>
+			{/if}
+		</details>
+	{/if}
+{/snippet}
+
 {#snippet dpiHops(hops: DpiHop[])}
 	<ol class="space-y-1">
 		{#each hops as hop}
@@ -404,6 +518,11 @@ const outcomeLabel: Record<string, string> = {
 				<span class="text-xs text-neutral-500"
 					>{outcomeLabel[hop.outcome] ?? hop.outcome}</span
 				>
+				{#if hop.tcp_diagnostics}
+					<div class="col-span-3 min-w-0">
+						{@render tcpDiagnostics(hop.tcp_diagnostics)}
+					</div>
+				{/if}
 			</li>
 		{/each}
 	</ol>
@@ -782,9 +901,10 @@ PROBE_TOKEN={created.token}</pre>
 					></label
 				>
 				<p class="mb-4 text-sm text-neutral-400">
-					TCP-соединение к хосту на порту 443, ClientHello с указанным SNI,
-					затем пакеты с возрастающим TTL. Хост разрешается сканером;
-					используется первый IP адрес.
+					Для каждого TTL создаётся новое TCP-соединение к хосту на порту 443.
+					ClientHello с указанным SNI отправляется с обычным TTL; через 100 мс
+					отправляются случайные данные с проверяемым TTL. Хост разрешается
+					сканером; используется первый IP адрес.
 				</p>
 			{/if}
 			<div class="grid gap-3 sm:grid-cols-[1fr_2fr_100px_auto] sm:items-end">
@@ -822,6 +942,15 @@ PROBE_TOKEN={created.token}</pre>
 			</div>
 			{#if busy.endsWith(":command")}
 				<p class="mt-5 text-sm text-cyan-300">Ожидание ответа сканера…</p>
+			{/if}
+			{#if result && result.type !== "error"}
+				<button
+					type="button"
+					class="btn-secondary mt-4"
+					onclick={() => result && void copy(JSON.stringify(result, null, 2))}
+				>
+					Копировать JSON результата
+				</button>
 			{/if}
 			{#if result?.type === "error"}
 				<p class="mt-5 text-sm text-red-300">{result.message}</p>
@@ -875,6 +1004,11 @@ PROBE_TOKEN={created.token}</pre>
 								<span class="text-xs text-neutral-500"
 									>{outcomeLabel[hop.outcome] ?? hop.outcome}</span
 								>
+								{#if hop.tcp_diagnostics}
+									<div class="col-span-3 min-w-0">
+										{@render tcpDiagnostics(hop.tcp_diagnostics)}
+									</div>
+								{/if}
 							</li>
 						{/each}
 					</ol>

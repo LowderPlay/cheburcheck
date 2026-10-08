@@ -143,6 +143,7 @@ mod tests {
             ttl: 1,
             router: Some("192.0.2.1".parse().unwrap()),
             outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+            tcp_diagnostics: None,
         }];
         let probes = vec![
             ProbeMetadata {

@@ -1,3 +1,4 @@
+use crate::packet_capture::TcpCapture;
 use etherparse::{
     Icmpv4Type, Icmpv6Slice, Icmpv6Type, IpNumber, LaxNetSlice, LaxSlicedPacket, TransportSlice,
     icmpv4, icmpv6,
@@ -74,6 +75,7 @@ fn trace_all_blocking(
     let receiver = Socket::new(domain, Type::RAW, Some(protocol))?;
     let mut hops = Vec::new();
     for ttl in 1..=max_hops {
+        let capture = TcpCapture::start(SocketAddr::new(target, HTTPS_PORT));
         let attempts = connect_attempts(target, ttl, retries)?;
         let response = if attempts.is_empty() {
             HopResponse::Timeout
@@ -95,6 +97,9 @@ fn trace_all_blocking(
             address,
             reverse_names: Vec::new(),
             outcome,
+            tcp_diagnostics: Some(
+                capture.finish(&attempts.iter().map(|(_, port)| *port).collect::<Vec<_>>()),
+            ),
         });
         if complete {
             break;

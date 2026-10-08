@@ -1,5 +1,6 @@
 mod dns;
 mod dpi_hop;
+mod packet_capture;
 mod sni;
 mod traceroute;
 mod update;
@@ -461,7 +462,7 @@ async fn update_config(
         bail!("dns_spoofing_provider_threshold must be between 1 and 4");
     }
     validate_dpi_probe_config(value.dpi_probe.as_ref())?;
-    let dpi_hops = measure_dpi_hops(value.dpi_probe.as_ref()).await;
+    let dpi_hops = measure_dpi_hops(value.dpi_probe.as_ref(), false).await;
     let loaded = LoadedProbeConfig {
         config: value,
         dpi_hop_v4: dpi_hops.v4,
@@ -494,7 +495,15 @@ async fn run_dpi_command(
                 .dpi_probe
                 .as_ref()
                 .context("DPI hop measurement is not configured")?;
-            let hops = measure_dpi_hops(Some(dpi)).await;
+            let hops = measure_dpi_hops(Some(dpi), true).await;
+            let mut status_hops = hops.clone();
+            for hop in status_hops
+                .hops_v4
+                .iter_mut()
+                .chain(&mut status_hops.hops_v6)
+            {
+                hop.tcp_diagnostics = None;
+            }
             let mut guard = config.write().await;
             let loaded = guard.as_mut().context("probe config is not loaded")?;
             if loaded.config.version != snapshot.config.version
@@ -506,8 +515,8 @@ async fn run_dpi_command(
             }
             loaded.dpi_hop_v4 = hops.v4;
             loaded.dpi_hop_v6 = hops.v6;
-            loaded.dpi_hops_v4 = hops.hops_v4.clone();
-            loaded.dpi_hops_v6 = hops.hops_v6.clone();
+            loaded.dpi_hops_v4 = status_hops.hops_v4.clone();
+            loaded.dpi_hops_v6 = status_hops.hops_v6.clone();
             Ok((
                 ProbeCommandResult::RemeasureDpiHop {
                     dpi_hop_v4: hops.v4,
@@ -515,7 +524,7 @@ async fn run_dpi_command(
                     dpi_hops_v4: hops.hops_v4.clone(),
                     dpi_hops_v6: hops.hops_v6.clone(),
                 },
-                Some(hops),
+                Some(status_hops),
             ))
         }
         ProbeCommand::SniTraceroute {
@@ -553,6 +562,7 @@ async fn run_dpi_command(
                 accept_ack_as_timeout: dpi_config
                     .as_ref()
                     .is_some_and(|dpi| dpi.accept_ack_as_timeout),
+                collect_tcp_metadata: true,
             })
             .await?;
             Ok((
@@ -598,7 +608,7 @@ fn validate_dpi_probe_config(config: Option<&DpiProbeConfig>) -> Result<()> {
     Ok(())
 }
 
-async fn measure_dpi_hops(config: Option<&DpiProbeConfig>) -> DpiHops {
+async fn measure_dpi_hops(config: Option<&DpiProbeConfig>, collect_tcp_metadata: bool) -> DpiHops {
     let Some(config) = config else {
         debug!("DPI hop measurement is not configured");
         return DpiHops::default();
@@ -611,6 +621,7 @@ async fn measure_dpi_hops(config: Option<&DpiProbeConfig>) -> DpiHops {
         hop_timeout: Duration::from_millis(config.hop_timeout_ms),
         accept_rst_fin_as_timeout: config.accept_rst_fin_as_timeout,
         accept_ack_as_timeout: config.accept_ack_as_timeout,
+        collect_tcp_metadata,
     };
     let (v4, v6) = tokio::join!(
         measure_dpi_hop(common(config.target_v4.into())),
@@ -648,11 +659,12 @@ fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
             result.target, hop.ttl, hop.router, hop.outcome
         );
     }
-    if let Some(invalid_hop) = result
-        .hops
-        .iter()
-        .find(|hop| hop.outcome.invalidates_measurement())
-    {
+    if let Some(invalid_hop) = result.hops.iter().find(|hop| {
+        hop.outcome.invalidates_measurement()
+            || hop.tcp_diagnostics.as_ref().is_some_and(|diagnostics| {
+                diagnostics.connect_error.is_some() || diagnostics.send_error.is_some()
+            })
+    }) {
         warn!(
             "DPI hop measurement for {} is invalid: {:?} at TTL {}",
             result.target, invalid_hop.outcome, invalid_hop.ttl
@@ -927,17 +939,20 @@ mod tests {
                 ttl: 1,
                 router: Some("192.0.2.1".parse().unwrap()),
                 outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+                tcp_diagnostics: None,
             }],
             dpi_hops_v6: vec![
                 reports::probe::DpiProbeHop {
                     ttl: 1,
                     router: Some("2001:db8::1".parse().unwrap()),
                     outcome: reports::probe::DpiProbeHopOutcome::IcmpTimeExceeded,
+                    tcp_diagnostics: None,
                 },
                 reports::probe::DpiProbeHop {
                     ttl: 2,
                     router: None,
                     outcome: reports::probe::DpiProbeHopOutcome::TcpClosed,
+                    tcp_diagnostics: None,
                 },
             ],
         };
@@ -976,6 +991,7 @@ mod tests {
                     ttl: 5,
                     router: None,
                     outcome,
+                    tcp_diagnostics: None,
                 }],
             };
 
@@ -994,9 +1010,30 @@ mod tests {
                 ttl: 1,
                 router: None,
                 outcome: dpi_hop::DpiHopProbeHopOutcome::Timeout,
+                tcp_diagnostics: None,
             }],
         };
 
         assert_eq!(dpi_hop_from_result(&result), Some(0));
+    }
+
+    #[test]
+    fn manual_connect_error_is_not_reported_as_dpi_hop_zero() {
+        let result = dpi_hop::DpiHopProbeResult {
+            target: "192.0.2.1:443".parse().unwrap(),
+            local_addr: "0.0.0.0:0".parse().unwrap(),
+            client_hello_bytes: 0,
+            max_icmp_time_exceeded_ttl: None,
+            hops: vec![reports::probe::DpiProbeHop {
+                ttl: 1,
+                router: None,
+                outcome: reports::probe::DpiProbeHopOutcome::Timeout,
+                tcp_diagnostics: Some(reports::probe::TcpDiagnostics {
+                    connect_error: Some("connect timed out".into()),
+                    ..Default::default()
+                }),
+            }],
+        };
+        assert_eq!(dpi_hop_from_result(&result), None);
     }
 }
