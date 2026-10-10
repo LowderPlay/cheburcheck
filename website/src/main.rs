@@ -2,6 +2,7 @@
 extern crate rocket;
 mod admin;
 mod agency;
+mod analytics;
 mod api;
 mod database_refresh;
 mod db;
@@ -36,20 +37,26 @@ fn api_error(status: Status, _: &Request) -> Json<JsonError> {
 }
 
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
-    match rocket.state::<PgPool>() {
-        Some(db) => match sqlx::migrate!("./migrations").run(db).await {
-            Ok(_) => Ok(rocket),
-            Err(e) => {
-                error!("Failed to run database migrations: {}", e);
-                Err(rocket)
-            }
-        },
-        None => Err(rocket),
+    let Some(db) = rocket.state::<PgPool>() else {
+        return Err(rocket);
+    };
+    if let Err(e) = sqlx::migrate!("./migrations").run(db).await {
+        error!("Failed to run PostgreSQL migrations: {e}");
+        return Err(rocket);
     }
+    let Some(analytics) = rocket.state::<analytics::Analytics>() else {
+        return Err(rocket);
+    };
+    if let Err(e) = analytics.migrate().await {
+        error!("Failed to run ClickHouse migrations: {e}");
+        return Err(rocket);
+    }
+    Ok(rocket)
 }
 
 #[launch]
 async fn rocket() -> _ {
+    dotenvy::dotenv().ok();
     env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
         .filter_module("website", LevelFilter::Info)
         .filter_module("querying", LevelFilter::Info)
@@ -99,16 +106,21 @@ async fn rocket() -> _ {
         .await
         .expect("Failed to create database pool");
 
+    let analytics = analytics::Analytics::connect_from_env()
+        .await
+        .expect("Failed to configure ClickHouse analytics");
+
     rocket::build()
         .manage(checker)
         .manage(pool)
+        .manage(analytics)
         .manage(api_limiter)
         .manage(probe_limiter)
         .manage(probe_update_download_limiter)
         .manage(mqtt_publisher)
         .manage(probe_response_cache)
         .manage(probe_update_proxy)
-        .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
+        .attach(AdHoc::try_on_ignite("Database Migrations", run_migrations))
         .mount(
             "/api/v1",
             routes![
