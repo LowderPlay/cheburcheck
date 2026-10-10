@@ -1,4 +1,6 @@
 use crate::agency::Agency;
+use crate::analytics::Analytics;
+use klickhouse::QueryBuilder;
 use querying::target::Target;
 use querying::{Check, CheckVerdict, Checker};
 use rocket::http::Status;
@@ -12,12 +14,12 @@ use sqlx::types::Uuid;
 use sqlx::types::chrono::NaiveDateTime;
 
 pub async fn save_query(
-    db: &mut sqlx::PgConnection,
+    analytics: &Analytics,
     target: &Target,
     check: &Check,
     addr: &ClientRealAddr,
     checker: RwLockReadGuard<'_, Checker>,
-) -> Result<Uuid, sqlx::Error> {
+) -> Result<Uuid, klickhouse::KlickhouseError> {
     let (cdn_networks, cdn_providers, rkn_domain): (Vec<_>, Vec<_>, Option<_>) =
         if let CheckVerdict::Blocked {
             cdn_provider_subnets,
@@ -50,41 +52,30 @@ pub async fn save_query(
         ),
     };
 
-    let id = sqlx::query_scalar(
-        "INSERT INTO queries (
-                     query,
-                     source_ip,
-                     source_country_code,
-                     source_city_geo_name_id,
-                     target_country_code,
-                     target_asn,
-                     target_provider,
-                     resolved_ips,
-                     cdn_networks,
-                     cdn_providers,
-                     rkn_domain
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
-    )
-    .bind(target.to_query())
-    .bind(addr.ip.to_string())
-    .bind(
-        checker
-            .geo_ip(addr.ip)
-            .await
-            .map(|i| i.country_code)
-            .ok()
-            .flatten(),
-    )
-    .bind(check.geo.city_geo_name_id.map(|id| id as i32))
-    .bind(check.geo.country_code.clone())
-    .bind(check.geo.asn.clone())
-    .bind(check.geo.organisation.clone())
-    .bind(resolved_ips)
-    .bind(cdn_networks)
-    .bind(cdn_providers)
-    .bind(rkn_domain)
-    .fetch_one(db)
-    .await?;
+    let id = Uuid::new_v4();
+    let source_country_code = checker
+        .geo_ip(addr.ip)
+        .await
+        .ok()
+        .and_then(|info| info.country_code);
+    drop(checker);
+    analytics
+        .execute(
+            QueryBuilder::new(crate::analytics::INSERT_QUERY_SQL)
+                .arg(id)
+                .arg(target.to_query())
+                .arg(addr.ip.to_string())
+                .arg(source_country_code)
+                .arg(check.geo.city_geo_name_id.map(|id| id as i32))
+                .arg(check.geo.country_code.clone())
+                .arg(check.geo.asn.clone())
+                .arg(check.geo.organisation.clone())
+                .arg(resolved_ips)
+                .arg(cdn_networks)
+                .arg(cdn_providers)
+                .arg(rkn_domain),
+        )
+        .await?;
 
     Ok(id)
 }
