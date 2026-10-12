@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
+use deadpool::managed::{Manager, Metrics, Object, Pool, RecycleError, RecycleResult};
 use klickhouse::{Client, ClientOptions, KlickhouseError, QueryBuilder, Row};
-use rocket::tokio::sync::Mutex;
+use rocket::tokio::sync::Semaphore;
+use rocket::tokio::time::timeout;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 mod embedded {
@@ -77,26 +80,206 @@ impl ConnectionConfig {
         })
     }
 
-    async fn connect(&self) -> Result<(Client, String)> {
-        let client = rocket::tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            Client::connect((self.host.as_str(), self.port), self.options.clone()),
-        )
+    async fn connect(&self) -> Result<(Connection, String)> {
+        let connection = timeout(Duration::from_secs(10), async {
+            let stream =
+                rocket::tokio::net::TcpStream::connect((self.host.as_str(), self.port)).await?;
+            stream.set_nodelay(self.options.tcp_nodelay)?;
+            let stream = stream.into_std()?;
+            // Retain a shutdown handle before starting the driver's background task.
+            // Its initial handshake does not observe dropped Client handles.
+            let socket = SocketGuard(stream.try_clone()?);
+            let stream = rocket::tokio::net::TcpStream::from_std(stream)?;
+            let (reader, writer) = stream.into_split();
+            let client = Client::connect_stream(reader, writer, self.options.clone()).await?;
+            anyhow::ensure!(
+                !client.is_closed(),
+                "ClickHouse connection closed during setup"
+            );
+            Ok::<_, anyhow::Error>(Connection {
+                client,
+                _socket: socket,
+            })
+        })
         .await
         .context("ClickHouse connection timed out")?
         .context("failed to connect to ClickHouse")?;
+        Ok((connection, self.stats_timezone.clone()))
+    }
+}
+
+struct SocketGuard(std::net::TcpStream);
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = self.0.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+struct Connection {
+    client: Client,
+    _socket: SocketGuard,
+}
+
+impl std::ops::Deref for Connection {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.client
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PoolSettings {
+    size: usize,
+    acquire_timeout: Duration,
+    query_timeout: Duration,
+}
+
+impl Default for PoolSettings {
+    fn default() -> Self {
+        Self {
+            size: 4,
+            acquire_timeout: Duration::from_secs(5),
+            query_timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+impl PoolSettings {
+    fn from_env() -> Result<Self> {
+        fn positive(name: &str, default: usize) -> Result<usize> {
+            match std::env::var(name) {
+                Ok(value) => {
+                    let value = value
+                        .parse::<usize>()
+                        .with_context(|| format!("invalid {name}"))?;
+                    anyhow::ensure!(value > 0, "{name} must be positive");
+                    Ok(value)
+                }
+                Err(std::env::VarError::NotPresent) => Ok(default),
+                Err(error) => Err(error).with_context(|| format!("invalid {name}")),
+            }
+        }
+        let defaults = Self::default();
+        let size = positive("CLICKHOUSE_POOL_SIZE", defaults.size)?;
         anyhow::ensure!(
-            !client.is_closed(),
-            "ClickHouse connection closed during setup"
+            size <= Semaphore::MAX_PERMITS,
+            "CLICKHOUSE_POOL_SIZE is too large"
         );
-        Ok((client, self.stats_timezone.clone()))
+        Ok(Self {
+            size,
+            acquire_timeout: Duration::from_secs(
+                positive("CLICKHOUSE_ACQUIRE_TIMEOUT_SECONDS", 5)? as u64,
+            ),
+            query_timeout: Duration::from_secs(
+                positive("CLICKHOUSE_QUERY_TIMEOUT_SECONDS", 10)? as u64
+            ),
+        })
+    }
+}
+
+struct ConnectionManager {
+    config: ConnectionConfig,
+}
+
+impl Manager for ConnectionManager {
+    type Type = Connection;
+    type Error = KlickhouseError;
+
+    async fn create(&self) -> klickhouse::Result<Connection> {
+        self.config
+            .connect()
+            .await
+            .map(|(connection, _)| connection)
+            .map_err(|error| {
+                KlickhouseError::ProtocolError(format!(
+                    "failed to connect to ClickHouse: {error:#}"
+                ))
+            })
+    }
+
+    async fn recycle(
+        &self,
+        connection: &mut Connection,
+        _: &Metrics,
+    ) -> RecycleResult<KlickhouseError> {
+        if connection.is_closed() {
+            Err(RecycleError::message("ClickHouse connection closed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct ConnectionPool {
+    inner: Pool<ConnectionManager>,
+    settings: PoolSettings,
+}
+
+// A lease starts non-reusable: cancellation or a timeout must close the connection,
+// since the driver's query may still be running. Only a completed operation can
+// return it to the pool. The socket guard explicitly closes discarded connections.
+struct ConnectionLease {
+    client: Option<Object<ConnectionManager>>,
+    reusable: bool,
+}
+
+impl ConnectionLease {
+    fn client(&self) -> &Client {
+        self.client.as_ref().expect("connection lease has a client")
+    }
+
+    fn finish<T>(&mut self, result: klickhouse::Result<T>) -> klickhouse::Result<T> {
+        // A decoding error can leave unread blocks in flight. Only success or a
+        // server exception establishes that the operation has finished safely.
+        self.reusable = !self.client().is_closed()
+            && matches!(
+                &result,
+                Ok(_) | Err(KlickhouseError::ServerException { .. })
+            );
+        result.and_then(|value| {
+            if self.client().is_closed() {
+                Err(KlickhouseError::ProtocolError(
+                    "ClickHouse connection closed while executing query".into(),
+                ))
+            } else {
+                Ok(value)
+            }
+        })
+    }
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        if !self.reusable {
+            if let Some(connection) = self.client.take() {
+                // Remove it permanently: returning a timed-out operation to the
+                // pool would queue later requests behind the unfinished query.
+                drop(Object::take(connection));
+            }
+        }
+    }
+}
+
+impl ConnectionPool {
+    async fn acquire(&self) -> klickhouse::Result<ConnectionLease> {
+        let client = timeout(self.settings.acquire_timeout, self.inner.get())
+            .await
+            .map_err(|_| {
+                KlickhouseError::ProtocolError("ClickHouse pool acquisition timed out".into())
+            })?
+            .map_err(|error| KlickhouseError::ProtocolError(format!("ClickHouse pool: {error}")))?;
+        Ok(ConnectionLease {
+            client: Some(client),
+            reusable: false,
+        })
     }
 }
 
 #[derive(Clone)]
 pub struct Analytics {
-    connection: Arc<Mutex<Option<Arc<Client>>>>,
-    config: Arc<ConnectionConfig>,
+    pool: Arc<ConnectionPool>,
     stats_timezone: String,
 }
 
@@ -117,104 +300,85 @@ impl Analytics {
         let uri = std::env::var("CLICKHOUSE_URL")
             .context("CLICKHOUSE_URL must specify clickhouse://user:password@host:9000/database")?;
         let config = ConnectionConfig::parse(&uri)?;
-        let (client, stats_timezone) = config.connect().await?;
-        client
-            .execute(QueryBuilder::new("SELECT toDate(now(), $1)").arg(stats_timezone.clone()))
+        let settings = PoolSettings::from_env()?;
+        let analytics = Self::new(config, settings)?;
+        analytics
+            .execute(
+                QueryBuilder::new("SELECT toDate(now(), $1)").arg(analytics.stats_timezone.clone()),
+            )
             .await
-            .context("invalid ClickHouse stats_timezone")?;
+            .context("failed to validate ClickHouse stats_timezone")?;
+        Ok(analytics)
+    }
+
+    fn new(config: ConnectionConfig, settings: PoolSettings) -> Result<Self> {
+        let stats_timezone = config.stats_timezone.clone();
+        let inner = Pool::builder(ConnectionManager { config })
+            .max_size(settings.size)
+            .build()
+            .context("failed to build ClickHouse pool")?;
         Ok(Self {
-            connection: Arc::new(Mutex::new(Some(Arc::new(client)))),
-            config: Arc::new(config),
+            pool: Arc::new(ConnectionPool { inner, settings }),
             stats_timezone,
         })
     }
 
     pub async fn migrate(&self) -> Result<()> {
-        embedded::migrations::runner()
-            .run_async(&mut self.client().await?.as_ref().clone())
-            .await
-            .context("failed to apply embedded ClickHouse migrations")?;
+        let mut connection = self.pool.acquire().await?;
+        // Migrations may contain multiple DDL statements and need a longer deadline.
+        let result = timeout(
+            Duration::from_secs(120),
+            embedded::migrations::runner()
+                .run_async(&mut connection.client.as_mut().unwrap().client),
+        )
+        .await
+        .context("ClickHouse migrations timed out")?;
+        connection.reusable = result.is_ok() && !connection.client().is_closed();
+        result.context("failed to apply embedded ClickHouse migrations")?;
+        anyhow::ensure!(
+            connection.reusable,
+            "ClickHouse connection closed during migrations"
+        );
         Ok(())
-    }
-
-    // All Analytics clones share the replacement connection. Serialize reconnects,
-    // but release the lock before running queries on the multiplexed client.
-    async fn client(&self) -> klickhouse::Result<Arc<Client>> {
-        let mut connection = self.connection.lock().await;
-        if let Some(client) = connection.as_ref().filter(|client| !client.is_closed()) {
-            return Ok(client.clone());
-        }
-        let (client, _) = self.config.connect().await.map_err(|error| {
-            KlickhouseError::ProtocolError(format!("failed to reconnect to ClickHouse: {error:#}"))
-        })?;
-        let client = Arc::new(client);
-        *connection = Some(client.clone());
-        log::info!("reconnected to ClickHouse");
-        Ok(client)
-    }
-
-    async fn invalidate(&self, failed: &Arc<Client>, error: &KlickhouseError) -> bool {
-        let disconnected = failed.is_closed()
-            || matches!(
-                error,
-                KlickhouseError::Io(_) | KlickhouseError::ProtocolError(_)
-            );
-        if disconnected {
-            let mut connection = self.connection.lock().await;
-            // An older in-flight request must not discard a newer connection.
-            if connection
-                .as_ref()
-                .is_some_and(|client| Arc::ptr_eq(client, failed))
-            {
-                *connection = None;
-            }
-        }
-        disconnected
-    }
-
-    fn check_result<T>(client: &Client, result: klickhouse::Result<T>) -> klickhouse::Result<T> {
-        // Klickhouse can end a result stream without emitting an error when its
-        // connection task exits. Do not accept partial reads or ambiguous writes
-        // as successful just because the stream ended.
-        result.and_then(|value| {
-            if client.is_closed() {
-                Err(KlickhouseError::ProtocolError(
-                    "ClickHouse connection closed while executing query".into(),
-                ))
-            } else {
-                Ok(value)
-            }
-        })
     }
 
     async fn read<T: Row>(&self, query: QueryBuilder<'_>) -> klickhouse::Result<Vec<T>> {
         let query = query.finalize()?.to_string();
-        let client = self.client().await?;
-        match Self::check_result(&client, client.query_collect(query.clone()).await) {
-            Ok(rows) => Ok(rows),
-            Err(error) => {
-                if !self.invalidate(&client, &error).await {
-                    return Err(error);
-                }
-                let client = self.client().await?;
-                let result = Self::check_result(&client, client.query_collect(query).await);
-                if let Err(error) = &result {
-                    self.invalidate(&client, error).await;
-                }
-                result
+        for attempt in 0..2 {
+            let mut connection = self.pool.acquire().await?;
+            let result = timeout(
+                self.pool.settings.query_timeout,
+                connection.client().query_collect(query.clone()),
+            )
+            .await
+            .map_err(|_| KlickhouseError::ProtocolError("ClickHouse query timed out".into()))?;
+            let result = connection.finish(result);
+            if attempt == 0
+                && matches!(
+                    &result,
+                    Err(KlickhouseError::Io(_) | KlickhouseError::ProtocolError(_))
+                )
+            {
+                // Release the failed lease before acquiring a replacement (also for size 1).
+                drop(connection);
+                continue;
             }
+            return result;
         }
+        unreachable!("read makes at most two attempts")
     }
 
-    // A failed insert can already have committed. Reconnect for subsequent
-    // requests without automatically replaying an ambiguous write.
+    // A failed insert can already have committed. Discard its connection without
+    // automatically replaying an ambiguous write.
     pub async fn execute(&self, query: QueryBuilder<'_>) -> klickhouse::Result<()> {
-        let client = self.client().await?;
-        let result = Self::check_result(&client, client.execute(query).await);
-        if let Err(error) = &result {
-            self.invalidate(&client, error).await;
-        }
-        result
+        let mut connection = self.pool.acquire().await?;
+        let result = timeout(
+            self.pool.settings.query_timeout,
+            connection.client().execute(query),
+        )
+        .await
+        .map_err(|_| KlickhouseError::ProtocolError("ClickHouse query timed out".into()))?;
+        connection.finish(result)
     }
 
     pub async fn query_by_id(&self, id: Uuid) -> klickhouse::Result<Option<StoredQuery>> {
@@ -299,7 +463,7 @@ mod tests {
         }
     }
 
-    #[derive(klickhouse::Row)]
+    #[derive(klickhouse::Row, Debug)]
     struct Count {
         count: u64,
     }
@@ -310,6 +474,174 @@ mod tests {
         result: String,
         verdicts: Vec<Option<String>>,
         duration_ms: Option<i64>,
+    }
+
+    async fn test_analytics(settings: PoolSettings) -> Result<Analytics> {
+        let config = ConnectionConfig::parse(&std::env::var("CLICKHOUSE_TEST_URL")?)?;
+        let analytics = Analytics::new(config, settings)?;
+        analytics.execute(QueryBuilder::new("SELECT 1")).await?;
+        Ok(analytics)
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires CLICKHOUSE_TEST_URL pointing to a disposable native ClickHouse server"]
+    async fn pool_is_bounded_and_shared_between_clones() -> Result<()> {
+        let analytics = test_analytics(PoolSettings {
+            size: 2,
+            acquire_timeout: Duration::from_millis(100),
+            ..PoolSettings::default()
+        })
+        .await?;
+        let clone = analytics.clone();
+        let mut first = analytics.pool.acquire().await?;
+        let mut second = clone.pool.acquire().await?;
+        assert_eq!(analytics.pool.inner.status().available, 0);
+        assert!(analytics.pool.acquire().await.is_err());
+        assert_eq!(analytics.pool.inner.status().available, 0);
+
+        // Separate native connections have distinct TCP source addresses.
+        let first_address = first.client.as_ref().unwrap()._socket.0.local_addr()?;
+        let second_address = second.client.as_ref().unwrap()._socket.0.local_addr()?;
+        assert_ne!(first_address, second_address);
+        let result = first.client().execute("SELECT 1").await;
+        first.finish(result)?;
+        let result = second.client().execute("SELECT 1").await;
+        second.finish(result)?;
+        drop(first);
+        let mut reused = clone.pool.acquire().await?;
+        let reused_address = reused.client.as_ref().unwrap()._socket.0.local_addr()?;
+        assert_eq!(first_address, reused_address);
+        let result = reused.client().execute("SELECT 1").await;
+        reused.finish(result)?;
+        drop(reused);
+        drop(second);
+        assert_eq!(analytics.pool.inner.status().available, 2);
+        assert_eq!(analytics.pool.inner.status().size, 2);
+        Ok(())
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires CLICKHOUSE_TEST_URL pointing to a disposable native ClickHouse server"]
+    async fn slow_query_does_not_block_other_connections() -> Result<()> {
+        let analytics = test_analytics(PoolSettings {
+            size: 2,
+            ..PoolSettings::default()
+        })
+        .await?;
+        let mut slow = analytics.pool.acquire().await?;
+        let (slow_result, fast_result) = rocket::tokio::join!(
+            slow.client().execute("SELECT sleep(1)"),
+            timeout(
+                Duration::from_millis(500),
+                analytics.read::<Count>(QueryBuilder::new("SELECT toUInt64(1) AS count"))
+            ),
+        );
+        slow.finish(slow_result)?;
+        assert_eq!(fast_result??[0].count, 1);
+        Ok(())
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires CLICKHOUSE_TEST_URL pointing to a disposable native ClickHouse server"]
+    async fn query_timeouts_discard_connections_and_release_capacity() -> Result<()> {
+        let analytics = test_analytics(PoolSettings {
+            size: 1,
+            query_timeout: Duration::from_millis(100),
+            ..PoolSettings::default()
+        })
+        .await?;
+        assert!(
+            analytics
+                .execute(QueryBuilder::new("SELECT sleep(1)"))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("query timed out")
+        );
+        assert_eq!(analytics.pool.inner.status().available, 0);
+        assert_eq!(analytics.pool.inner.status().size, 0);
+        // Recovery must use a new connection rather than queue behind the slow query.
+        let rows: Vec<Count> = analytics
+            .read(QueryBuilder::new("SELECT toUInt64(1) AS count"))
+            .await?;
+        assert_eq!(rows[0].count, 1);
+        assert!(
+            analytics
+                .read::<Count>(QueryBuilder::new(
+                    "SELECT toUInt64(1) AS count WHERE sleep(1) = 0"
+                ))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("query timed out")
+        );
+        assert_eq!(analytics.pool.inner.status().available, 0);
+        assert_eq!(analytics.pool.inner.status().size, 0);
+        analytics.execute(QueryBuilder::new("SELECT 1")).await?;
+        Ok(())
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires CLICKHOUSE_TEST_URL pointing to a disposable native ClickHouse server"]
+    async fn cancellation_discards_connection_and_releases_capacity() -> Result<()> {
+        let analytics = test_analytics(PoolSettings {
+            size: 1,
+            ..PoolSettings::default()
+        })
+        .await?;
+        // Cancelling a future with a lease must not return an in-flight query to the pool.
+        assert!(
+            timeout(
+                Duration::from_millis(100),
+                analytics.execute(QueryBuilder::new("SELECT sleep(1)")),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(analytics.pool.inner.status().available, 0);
+        assert_eq!(analytics.pool.inner.status().size, 0);
+        let rows: Vec<Count> = analytics
+            .read(QueryBuilder::new("SELECT toUInt64(1) AS count"))
+            .await?;
+        assert_eq!(rows[0].count, 1);
+        Ok(())
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires CLICKHOUSE_TEST_URL pointing to a disposable native ClickHouse server"]
+    async fn stalled_handshake_times_out_and_closes_socket() -> Result<()> {
+        use rocket::tokio::{io::AsyncReadExt, net::TcpListener};
+        let mut config = ConnectionConfig::parse(&std::env::var("CLICKHOUSE_TEST_URL")?)?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        config.host = address.ip().to_string();
+        config.port = address.port();
+        let analytics = Analytics::new(
+            config,
+            PoolSettings {
+                size: 1,
+                acquire_timeout: Duration::from_millis(100),
+                ..PoolSettings::default()
+            },
+        )?;
+        let peer = rocket::tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            // Accept TCP but never send the ClickHouse hello. Cancellation must
+            // close the socket even though the driver's handshake is still waiting.
+            let mut received = Vec::new();
+            socket.read_to_end(&mut received).await?;
+            Ok::<_, std::io::Error>(received)
+        });
+        let error = analytics
+            .pool
+            .acquire()
+            .await
+            .err()
+            .expect("handshake must time out");
+        assert!(error.to_string().contains("acquisition timed out"));
+        assert_eq!(analytics.pool.inner.status().size, 0);
+        assert!(!timeout(Duration::from_secs(2), peer).await???.is_empty());
+        Ok(())
     }
 
     // A single-connection TCP proxy lets the test simulate a server outage
@@ -373,19 +705,24 @@ mod tests {
         let forwarding = proxy(listener, upstream.clone(), false);
         config.host = address.ip().to_string();
         config.port = address.port();
-        let (client, stats_timezone) = config.connect().await?;
-        let analytics = Analytics {
-            connection: Arc::new(Mutex::new(Some(Arc::new(client)))),
-            config: Arc::new(config),
-            stats_timezone,
-        };
+        let analytics = Analytics::new(
+            config,
+            PoolSettings {
+                size: 1,
+                ..PoolSettings::default()
+            },
+        )?;
         let clone = analytics.clone();
-        let initial = analytics.client().await?;
+
         let rows: Vec<Count> = analytics
             .read(QueryBuilder::new("SELECT toUInt64(1) AS count"))
             .await?;
         assert_eq!(rows[0].count, 1);
 
+        let mut lease = analytics.pool.acquire().await?;
+        let initial = lease.client().clone();
+        lease.finish(Ok(()))?;
+        drop(lease);
         forwarding.abort();
         let _ = forwarding.await;
         timeout(Duration::from_secs(2), async {
@@ -404,24 +741,12 @@ mod tests {
 
         let listener = TcpListener::bind(address).await?;
         let forwarding = proxy(listener, upstream, true);
-        // Concurrent callers all obtain the same replacement connection.
-        let (first, second) = rocket::tokio::join!(analytics.client(), clone.client());
-        let first = first?;
-        assert!(Arc::ptr_eq(&first, &second?));
-        assert!(!Arc::ptr_eq(&initial, &first));
-        // An older failed request cannot invalidate a successfully reconnected client.
-        analytics
-            .invalidate(&initial, &KlickhouseError::ProtocolError("closed".into()))
-            .await;
-        assert!(Arc::ptr_eq(&first, &analytics.client().await?));
-        clone.execute(QueryBuilder::new("SELECT 1")).await?;
         let rows: Vec<Count> = analytics
             .read(QueryBuilder::new(
                 "SELECT toUInt64(2) AS count /* disconnect_test_marker */",
             ))
             .await?;
         assert_eq!(rows[0].count, 2);
-        assert!(!Arc::ptr_eq(&first, &analytics.client().await?));
         clone.execute(QueryBuilder::new("SELECT 1")).await?;
         forwarding.abort();
         let _ = forwarding.await;
@@ -440,11 +765,7 @@ mod tests {
             .await?;
         client.execute(format!("USE {database}")).await?;
         config.options.default_database = database.clone();
-        let analytics = Analytics {
-            connection: Arc::new(Mutex::new(Some(Arc::new(client.clone())))),
-            config: Arc::new(config),
-            stats_timezone: "UTC".into(),
-        };
+        let analytics = Analytics::new(config, PoolSettings::default())?;
         let result: Result<()> = async {
             analytics.migrate().await?;
             analytics.migrate().await?;
@@ -519,14 +840,14 @@ mod tests {
             assert_eq!(probe.result, json);
             assert_eq!(probe.verdicts, vec![Some("blocked".into())]);
             assert_eq!(probe.duration_ms, Some(1234));
-            let before = analytics.client().await?;
+            let available_before = analytics.pool.inner.status().available;
             assert!(
                 analytics
                     .execute(QueryBuilder::new("SELECT unknown_column"))
                     .await
                     .is_err()
             );
-            assert!(Arc::ptr_eq(&before, &analytics.client().await?));
+            assert_eq!(available_before, analytics.pool.inner.status().available);
             Ok(())
         }
         .await;
