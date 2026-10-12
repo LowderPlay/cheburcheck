@@ -1,4 +1,5 @@
 use super::rate_limit::ApiRateLimiter;
+use crate::analytics::{Analytics, ComplaintDay};
 use crate::db::{WhitelistedEntry, check_whitelist, save_query};
 use log::warn;
 use querying::asn::AsnInfo;
@@ -38,50 +39,13 @@ pub struct ApiCheckResponse {
     pub complaints: Vec<ComplaintDay>,
 }
 
-#[derive(Serialize)]
-pub struct ComplaintDay {
-    pub date: String,
-    pub count: i64,
-}
-
-async fn load_complaints(
-    db: &mut sqlx::PgConnection,
-    target: &Target,
-) -> Result<Vec<ComplaintDay>, sqlx::Error> {
-    let rows = sqlx::query!(
-        r#"SELECT days.day::date::text AS "date!", COALESCE(reports.count, 0)::bigint AS "count!"
-         FROM generate_series(current_date - 13, current_date, interval '1 day') AS days(day)
-         LEFT JOIN (
-             SELECT h.date::date AS day, COUNT(DISTINCT h.source_ip)::bigint AS count
-             FROM human_reports h
-             JOIN queries q ON q.id = h.id
-             WHERE h.date >= current_date - 13
-               AND h.date < current_date + 1
-               AND h.works = false
-               AND LOWER(q.query) = LOWER($1)
-             GROUP BY h.date::date
-         ) reports ON reports.day = days.day::date
-         ORDER BY days.day"#,
-        target.to_query()
-    )
-    .fetch_all(db)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| ComplaintDay {
-            date: row.date,
-            count: row.count,
-        })
-        .collect())
-}
-
 #[get("/check?<target>")]
 pub async fn check(
     target: &str,
     checker: &State<Arc<RwLock<Checker>>>,
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
+    analytics: &State<Analytics>,
     limiter: &State<Arc<ApiRateLimiter>>,
 ) -> Result<Json<ApiCheckResponse>, Status> {
     if !limiter.check(&addr.ip) {
@@ -91,13 +55,8 @@ pub async fn check(
     let target = Target::from(target.trim());
     let check = checker.read().await.check(target.clone()).await;
 
-    let mut db = pool
-        .acquire()
-        .await
-        .map_err(|_| Status::InternalServerError)?;
-
     let id: Option<String> = if let Ok(check) = &check {
-        match save_query(&mut db, &target, check, addr, checker.read().await).await {
+        match save_query(analytics, &target, check, addr, checker.read().await).await {
             Ok(id) => Some(id.to_string()),
             Err(e) => {
                 warn!("api: failed to save check: {:?}", e);
@@ -109,6 +68,10 @@ pub async fn check(
     };
 
     let whitelist: Option<WhitelistedEntry> = if let Target::Domain(domain) = &target {
+        let mut db = pool
+            .acquire()
+            .await
+            .map_err(|_| Status::InternalServerError)?;
         check_whitelist(domain, &mut db)
             .await
             .map_err(|_| Status::InternalServerError)?
@@ -117,7 +80,7 @@ pub async fn check(
     };
 
     let complaints = match &check {
-        Ok(_) => match load_complaints(&mut db, &target).await {
+        Ok(_) => match analytics.complaints(&target.to_query()).await {
             Ok(days) => days,
             Err(e) => {
                 warn!("api: failed to load complaints: {:?}", e);

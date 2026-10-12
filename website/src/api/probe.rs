@@ -1,5 +1,7 @@
 use super::rate_limit::ProbeRateLimiter;
+use crate::analytics::Analytics;
 use crate::mqtt::{MqttPublisher, PublishError};
+use klickhouse::QueryBuilder;
 use log::warn;
 use querying::target::Target;
 use reports::probe::{
@@ -114,6 +116,7 @@ pub async fn probe_query(
     token: Option<&str>,
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
+    analytics: &State<Analytics>,
     mqtt: &State<MqttPublisher>,
     limiter: &State<Arc<ProbeRateLimiter>>,
     cache: &State<Arc<ProbeResponseCache>>,
@@ -123,14 +126,16 @@ pub async fn probe_query(
     }
 
     let id = Uuid::try_parse(id).map_err(|_| Status::BadRequest)?;
-    let query: Option<(String, Vec<String>)> =
-        sqlx::query_as("SELECT query, resolved_ips FROM queries WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&**pool)
-            .await
-            .map_err(|_| Status::InternalServerError)?;
-
-    let (query, resolved_ips) = query.ok_or(Status::NotFound)?;
+    let stored_query = analytics
+        .query_by_id(id)
+        .await
+        .map_err(|error| {
+            warn!("api: failed to load probe query {id}: {error}");
+            Status::InternalServerError
+        })?
+        .ok_or(Status::NotFound)?;
+    let query = stored_query.query;
+    let resolved_ips = stored_query.resolved_ips;
     let target = Target::from(query.trim());
     let domain = match &target {
         Target::Domain(domain) => Some(domain.as_str()),
@@ -146,6 +151,7 @@ pub async fn probe_query(
     }
     let ip = resolved_ips
         .first()
+        .and_then(|ip| ip.as_ref())
         .and_then(|ip| ip.parse::<IpAddr>().ok())
         .ok_or(Status::BadRequest)?;
     if Target::is_bogon(ip) {
@@ -197,6 +203,7 @@ pub async fn probe_query(
 
     let timeout = mqtt.task_timeout();
     let pool = pool.inner().clone();
+    let analytics = analytics.inner().clone();
     let cache = cache.inner().clone();
     let query_id = id;
     let id = id.to_string();
@@ -215,10 +222,11 @@ pub async fn probe_query(
             entry.response["job_id"] = json!(id);
             if let Err(error) = insert_probe_report(
                 query_id,
+                &query,
                 &entry.response,
                 entry.target_traceroute.as_ref(),
                 entry.duration_ms,
-                &pool,
+                &analytics,
             ).await {
                 warn!("api: failed to save cached probe report for query {id}: {error}");
             }
@@ -267,10 +275,11 @@ pub async fn probe_query(
                                 );
                                 if let Err(error) = insert_probe_report(
                                     query_id,
+                                    &query,
                                     &response,
                                     target_traceroute.as_ref(),
                                     duration_ms,
-                                    &pool,
+                                    &analytics,
                                 ).await {
                                     warn!("api: failed to save probe report for query {id}: {error}");
                                 }
@@ -412,11 +421,12 @@ pub fn build_probe_response(
 
 async fn insert_probe_report(
     query_id: Uuid,
+    query: &str,
     response: &Value,
     target_traceroute: Option<&TcpTracerouteResult>,
     duration_ms: u64,
-    pool: &PgPool,
-) -> Result<(), sqlx::Error> {
+    analytics: &Analytics,
+) -> Result<(), klickhouse::KlickhouseError> {
     let probe_id = response
         .get("probe_id")
         .and_then(Value::as_str)
@@ -428,9 +438,10 @@ async fn insert_probe_report(
             verdicts
                 .iter()
                 .filter_map(Value::as_str)
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_else(|| vec!["uncertain"]);
+        .unwrap_or_else(|| vec!["uncertain".to_owned()]);
     let (target_hop_count, target_trace_result) = traceroute_columns(target_traceroute);
     let duration_ms = i64::try_from(duration_ms).unwrap_or(i64::MAX);
 
@@ -439,37 +450,19 @@ async fn insert_probe_report(
         return Ok(());
     };
 
-    sqlx::query(
-        r#"
-        INSERT INTO probe_reports (
-            query_id,
-            probe_id,
-            verdicts,
-            result,
-            target_hop_count,
-            target_trace_result,
-            duration_ms
+    analytics
+        .execute(
+            QueryBuilder::new(crate::analytics::INSERT_PROBE_REPORT_SQL)
+                .arg(query_id)
+                .arg(query)
+                .arg(probe_id)
+                .arg(verdicts)
+                .arg(response.to_string())
+                .arg(target_hop_count)
+                .arg(target_trace_result)
+                .arg(duration_ms),
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (query_id, probe_id)
-        DO UPDATE SET
-            date = NOW(),
-            verdicts = EXCLUDED.verdicts,
-            result = EXCLUDED.result,
-            target_hop_count = EXCLUDED.target_hop_count,
-            target_trace_result = EXCLUDED.target_trace_result,
-            duration_ms = EXCLUDED.duration_ms
-        "#,
-    )
-    .bind(query_id)
-    .bind(probe_id)
-    .bind(verdicts)
-    .bind(response)
-    .bind(target_hop_count)
-    .bind(target_trace_result)
-    .bind(duration_ms)
-    .execute(pool)
-    .await?;
+        .await?;
 
     Ok(())
 }
