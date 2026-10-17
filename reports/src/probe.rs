@@ -41,6 +41,44 @@ pub struct TcpDiagnostics {
     pub send_error: Option<String>,
     pub client_hello_sent_ms: Option<u64>,
     pub junk_sent_ms: Option<u64>,
+    /// Whether the complete low-TTL payload was accepted by the socket
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_sent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_closed_before_payload: Option<bool>,
+}
+
+/// Optional command diagnostics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DpiCalibrationDebug {
+    pub method: String,
+    pub dpi_hop: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_sni: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_clear_ttl: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_reset_ttl: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_witness_ttl: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<DpiCalibrationAttempt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DpiCalibrationAttempt {
+    pub ttl: u8,
+    pub control: bool,
+    pub outcome: String,
+    pub router: Option<IpAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_diagnostics: Option<TcpDiagnostics>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -258,6 +296,10 @@ pub enum ProbeCommandResult {
         dpi_hop_v6: Option<u8>,
         dpi_hops_v4: Vec<DpiProbeHop>,
         dpi_hops_v6: Vec<DpiProbeHop>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calibration_v4: Option<DpiCalibrationDebug>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calibration_v6: Option<DpiCalibrationDebug>,
     },
     SniTraceroute {
         host: String,
@@ -265,6 +307,8 @@ pub enum ProbeCommandResult {
         target: std::net::SocketAddr,
         dpi_hop: Option<u8>,
         hops: Vec<DpiProbeHop>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        calibration: Option<DpiCalibrationDebug>,
     },
     Error {
         message: String,
@@ -345,6 +389,74 @@ pub fn validate_sni_traceroute(host: &str, sni: &str) -> Result<(), &'static str
 #[cfg(test)]
 mod command_tests {
     use super::*;
+
+    #[test]
+    fn old_probe_results_do_not_require_calibration_debug_fields() {
+        for wire in [
+            r#"{"type":"sni_traceroute","host":"example.com","sni":"instagram.com","target":"192.0.2.1:443","dpi_hop":2,"hops":[]}"#,
+            r#"{"type":"remeasure_dpi_hop","dpi_hop_v4":2,"dpi_hop_v6":null,"dpi_hops_v4":[],"dpi_hops_v6":[]}"#,
+        ] {
+            let result: ProbeCommandResult = serde_json::from_str(wire).unwrap();
+            // Adding optional diagnostics must not change a legacy response.
+            assert_eq!(
+                serde_json::to_value(result).unwrap(),
+                serde_json::from_str::<serde_json::Value>(wire).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn new_results_keep_the_legacy_envelope_and_commands() {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum LegacyResult {
+            SniTraceroute {
+                host: String,
+                sni: String,
+                target: std::net::SocketAddr,
+                dpi_hop: Option<u8>,
+                hops: Vec<DpiProbeHop>,
+            },
+        }
+        let wire = serde_json::to_value(ProbeCommandResult::SniTraceroute {
+            host: "example.com".into(),
+            sni: "instagram.com".into(),
+            target: "192.0.2.1:443".parse().unwrap(),
+            dpi_hop: Some(4),
+            hops: vec![],
+            calibration: Some(DpiCalibrationDebug {
+                method: "rst_client_hello".into(),
+                dpi_hop: Some(4),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        let LegacyResult::SniTraceroute {
+            host,
+            sni,
+            target,
+            dpi_hop,
+            hops,
+        } = serde_json::from_value(wire).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(sni, "instagram.com");
+        assert_eq!(target.port(), 443);
+        assert_eq!(dpi_hop, Some(4));
+        assert!(hops.is_empty());
+        assert_eq!(
+            serde_json::to_value(ProbeCommand::RemeasureDpiHop).unwrap(),
+            serde_json::json!({"type":"remeasure_dpi_hop"})
+        );
+        assert_eq!(
+            serde_json::to_value(ProbeCommand::SniTraceroute {
+                host: "example.com".into(),
+                sni: "instagram.com".into(),
+                max_hops: 15
+            })
+            .unwrap(),
+            serde_json::json!({"type":"sni_traceroute","host":"example.com","sni":"instagram.com","max_hops":15})
+        );
+    }
 
     #[test]
     fn validates_separate_host_and_sni() {

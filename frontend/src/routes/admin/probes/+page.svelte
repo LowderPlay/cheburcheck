@@ -64,6 +64,26 @@ type TcpDiagnostics = {
 	truncated: boolean;
 	client_hello_sent_ms: number | null;
 	junk_sent_ms: number | null;
+	payload_sent?: boolean;
+	peer_closed_before_payload?: boolean;
+};
+type CalibrationDebug = {
+	method: string;
+	dpi_hop: number | null;
+	fallback_reason?: string;
+	failure_reason?: string;
+	control_sni?: string;
+	last_clear_ttl?: number;
+	first_reset_ttl?: number;
+	control_witness_ttl?: number;
+	attempts?: {
+		ttl: number;
+		control: boolean;
+		outcome: string;
+		router: string | null;
+		error?: string;
+		tcp_diagnostics?: TcpDiagnostics;
+	}[];
 };
 type DpiHop = {
 	ttl: number;
@@ -85,6 +105,8 @@ type CommandResult =
 			dpi_hop_v6: number | null;
 			dpi_hops_v4: DpiHop[];
 			dpi_hops_v6: DpiHop[];
+			calibration_v4?: CalibrationDebug;
+			calibration_v6?: CalibrationDebug;
 	  }
 	| {
 			type: "sni_traceroute";
@@ -93,6 +115,7 @@ type CommandResult =
 			target: string;
 			dpi_hop: number | null;
 			hops: DpiHop[];
+			calibration?: CalibrationDebug;
 	  }
 	| { type: "error"; message: string };
 type Form = Pick<
@@ -447,10 +470,16 @@ const outcomeLabel: Record<string, string> = {
 					Ошибка отправки: {diagnostics.send_error}
 				</p>
 			{/if}
+			{#if diagnostics.payload_sent === false}
+				<p class="mt-2 text-amber-300">
+					TTL-данные не записаны полностью{diagnostics.peer_closed_before_payload ? ": соединение закрыто до попытки отправки" : ""}.
+				</p>
+			{/if}
 			<p class="mt-2 text-neutral-400">
 				Время приблизительное, от начала захвата.
 				{#if diagnostics.client_hello_sent_ms !== null}
-					ClientHello: {diagnostics.client_hello_sent_ms} мс; данные:
+					Попытка ClientHello: {diagnostics.client_hello_sent_ms} мс; попытка
+					записи данных:
 					{diagnostics.junk_sent_ms ?? "—"}
 					мс.
 				{/if}
@@ -503,6 +532,57 @@ const outcomeLabel: Record<string, string> = {
 					Для части пакетов IP-заголовок недоступен; TTL не измерен.
 				</p>
 			{/if}
+		</details>
+	{/if}
+{/snippet}
+
+{#snippet calibrationDebug(calibration: CalibrationDebug | undefined)}
+	{#if calibration}
+		<details class="my-3 rounded-lg border border-neutral-700 p-3 text-xs">
+			<summary class="cursor-pointer text-neutral-300">
+				Калибровка: {calibration.method}; DPI hop: {calibration.dpi_hop ?? "—"}
+			</summary>
+			{#if calibration.fallback_reason}
+				<p class="mt-2">Причина fallback: {calibration.fallback_reason}</p>
+			{/if}
+			{#if calibration.failure_reason}
+				<p class="mt-2 text-amber-300">
+					Не подтверждено: {calibration.failure_reason}
+				</p>
+			{/if}
+			{#if calibration.control_sni}
+				<p class="mt-2">Контрольный SNI: {calibration.control_sni}</p>
+			{/if}
+			{#if calibration.first_reset_ttl !== undefined}
+				<p class="mt-2">
+					Последний подтверждённый TTL до фильтра:
+					{calibration.last_clear_ttl ?? "—"}; первый TTL с RST:
+					{calibration.first_reset_ttl}. TCP-проверки начинаются после верхней
+					границы.
+				</p>
+			{/if}
+			{#if calibration.control_witness_ttl !== undefined}
+				<p class="mt-2">
+					Контрольный ICMP за границей: TTL {calibration.control_witness_ttl}.
+				</p>
+			{/if}
+			<ol class="mt-3 space-y-2">
+				{#each calibration.attempts ?? [] as attempt}
+					<li class="rounded border border-neutral-800 p-2">
+						<span class="font-mono"
+							>TTL {attempt.ttl} ·
+							{attempt.control ? "контроль" : "проверяемый SNI"}
+							·
+							{attempt.outcome}
+							· {attempt.router ?? "—"}</span
+						>
+						{#if attempt.error}
+							<p class="text-amber-300">{attempt.error}</p>
+						{/if}
+						{@render tcpDiagnostics(attempt.tcp_diagnostics)}
+					</li>
+				{/each}
+			</ol>
 		</details>
 	{/if}
 {/snippet}
@@ -964,9 +1044,10 @@ PROBE_TOKEN={created.token}</pre>
 					{result.dpi_hop_v6 ?? "—"}.
 				</p>
 				<div class="mt-4 grid gap-4 sm:grid-cols-2">
-					{#each [{ label: "IPv4", hops: result.dpi_hops_v4 }, { label: "IPv6", hops: result.dpi_hops_v6 }] as trace}
+					{#each [{ label: "IPv4", hops: result.dpi_hops_v4, calibration: result.calibration_v4 }, { label: "IPv6", hops: result.dpi_hops_v6, calibration: result.calibration_v6 }] as trace}
 						<div>
 							<h3 class="mb-2 font-semibold">{trace.label}</h3>
+							{@render calibrationDebug(trace.calibration)}
 							{@render dpiHops(trace.hops)}
 						</div>
 					{/each}
@@ -980,6 +1061,7 @@ PROBE_TOKEN={created.token}</pre>
 						SNI: {result.sni}; DPI hop: {result.dpi_hop ?? "—"}
 					</p>
 					{@render dpiHops(result.hops)}
+					{@render calibrationDebug(result.calibration)}
 				</div>
 			{:else if result?.type === "traceroute"}
 				<div class="mt-6">

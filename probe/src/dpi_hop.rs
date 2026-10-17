@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 const PROBE_BYTES: usize = 256;
 const DPI_CLASSIFICATION_DELAY: Duration = Duration::from_millis(100);
 
+mod rst_calibration;
+
 #[derive(Debug, Clone)]
 pub struct DpiHopProbeConfig {
     pub target: SocketAddr,
@@ -35,6 +37,7 @@ pub struct DpiHopProbeResult {
     pub client_hello_bytes: usize,
     pub max_icmp_time_exceeded_ttl: Option<u8>,
     pub hops: Vec<DpiHopProbeHop>,
+    pub calibration: reports::probe::DpiCalibrationDebug,
 }
 
 pub use reports::probe::{
@@ -48,6 +51,18 @@ pub async fn detect_dpi_hop(config: DpiHopProbeConfig) -> io::Result<DpiHopProbe
 }
 
 pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopProbeResult> {
+    let mut result = detect_post_client_hello(&config)?;
+    if let Some(reason) = result.calibration.failure_reason.as_deref()
+        && matches!(reason, "early_close" | "no_icmp")
+    {
+        // A reset can close the classified stream before a TTL-limited packet
+        // ever leaves it. Locate the trigger with separate, paired ClientHellos instead
+        result.calibration = rst_calibration::calibrate(&config, reason.to_owned());
+    }
+    Ok(result)
+}
+
+fn detect_post_client_hello(config: &DpiHopProbeConfig) -> io::Result<DpiHopProbeResult> {
     if config.max_ttl == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -67,6 +82,7 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
     let mut max_icmp_time_exceeded_ttl = None;
     let mut result_local_addr: Option<SocketAddr> = None;
     let mut client_hello_bytes = None;
+    let mut early_close = false;
 
     for ttl in 1..=config.max_ttl {
         // TCP is a byte stream: once a low-TTL segment is lost, later writes on
@@ -88,10 +104,10 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         let mut tcp = match connection {
             Ok(tcp) => tcp,
             Err(error) => {
-                let Some(capture) = capture else {
-                    return Err(error);
-                };
-                let mut diagnostics = capture.finish(&port.into_iter().collect::<Vec<_>>());
+                // Preserve partial progress for automatic calibration too.
+                let mut diagnostics = capture
+                    .map(|capture| capture.finish(&port.into_iter().collect::<Vec<_>>()))
+                    .unwrap_or_default();
                 diagnostics.connect_error = Some(error.to_string());
                 hops.push(DpiHopProbeHop {
                     ttl,
@@ -134,9 +150,6 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         // packet triggers low-TTL filtering even for control SNI on some paths.
         let hello_sent_ms = capture.as_ref().map(TcpCapture::elapsed_ms);
         if let Err(error) = tcp.write_all(&client_hello) {
-            if capture.is_none() {
-                return Err(error);
-            }
             // Continue observing after a fast reset to catch competing server
             // packets as well. Automatic measurements retain their old behavior.
             std::thread::sleep(config.hop_timeout);
@@ -144,6 +157,10 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             if let Some(diagnostics) = &mut diagnostics {
                 diagnostics.send_error = Some(error.to_string());
             }
+            early_close = matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+            );
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
@@ -161,23 +178,38 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         }
         std::thread::sleep(DPI_CLASSIFICATION_DELAY);
         drain_socket(&icmp)?;
+        if peer_closed(&tcp)? {
+            early_close = true;
+            let mut diagnostics = finish_capture(capture, local_addr, hello_sent_ms, None);
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.payload_sent = Some(false);
+                diagnostics.peer_closed_before_payload = Some(true);
+            }
+            hops.push(DpiHopProbeHop {
+                ttl,
+                router: None,
+                outcome: DpiHopProbeHopOutcome::TcpClosed,
+                tcp_diagnostics: diagnostics,
+            });
+            break;
+        }
         let mut payload = [0u8; PROBE_BYTES];
         rand::thread_rng().fill_bytes(&mut payload);
         let junk_sent_ms = capture.as_ref().map(TcpCapture::elapsed_ms);
         let payload_sent = send_with_ttl(&mut tcp, config.target, &payload, ttl)?;
         if !payload_sent {
-            if capture.is_some() {
-                std::thread::sleep(config.hop_timeout);
+            early_close = true;
+            let mut diagnostics = finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms);
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.payload_sent = Some(false);
+                diagnostics.peer_closed_before_payload = Some(false);
             }
             hops.push(DpiHopProbeHop {
                 ttl,
                 router: None,
-                outcome: classify_hop(None, true, false, &config),
-                tcp_diagnostics: finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms),
+                outcome: DpiHopProbeHopOutcome::TcpClosed,
+                tcp_diagnostics: diagnostics,
             });
-            if config.accept_rst_fin_as_timeout {
-                continue;
-            }
             break;
         }
 
@@ -185,21 +217,27 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
             listen_for_time_exceeded(&icmp, local_addr, config.target, config.hop_timeout)?;
         let closed = peer_closed(&tcp)?;
         let acknowledged = !closed && tcp_payload_acknowledged(&tcp)?;
-        let outcome = classify_hop(router, closed, acknowledged, &config);
+        let outcome = classify_hop(router, closed, acknowledged, config);
         if outcome == DpiHopProbeHopOutcome::IcmpTimeExceeded {
             max_icmp_time_exceeded_ttl = Some(ttl);
+        }
+        let mut diagnostics = finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms);
+        if let Some(diagnostics) = &mut diagnostics {
+            diagnostics.payload_sent = Some(true);
+            diagnostics.peer_closed_before_payload = Some(false);
         }
         hops.push(DpiHopProbeHop {
             ttl,
             router,
             outcome,
-            tcp_diagnostics: finish_capture(capture, local_addr, hello_sent_ms, junk_sent_ms),
+            tcp_diagnostics: diagnostics,
         });
         if outcome.invalidates_measurement() {
             break;
         }
     }
 
+    let calibration = legacy_calibration(&hops, max_icmp_time_exceeded_ttl, early_close);
     Ok(DpiHopProbeResult {
         target: config.target,
         local_addr: result_local_addr.unwrap_or_else(|| {
@@ -215,7 +253,45 @@ pub fn detect_dpi_hop_blocking(config: DpiHopProbeConfig) -> io::Result<DpiHopPr
         client_hello_bytes: client_hello_bytes.unwrap_or(0),
         max_icmp_time_exceeded_ttl,
         hops,
+        calibration,
     })
+}
+
+fn legacy_calibration(
+    hops: &[DpiHopProbeHop],
+    max_icmp_time_exceeded_ttl: Option<u8>,
+    early_close: bool,
+) -> reports::probe::DpiCalibrationDebug {
+    let failure_reason = if hops.iter().any(|hop| {
+        hop.tcp_diagnostics
+            .as_ref()
+            .is_some_and(|d| d.connect_error.is_some())
+    }) {
+        Some("connect_error")
+    } else if early_close {
+        Some("early_close")
+    } else if hops.iter().any(|hop| {
+        hop.outcome.invalidates_measurement()
+            || hop
+                .tcp_diagnostics
+                .as_ref()
+                .is_some_and(|d| d.send_error.is_some())
+    }) {
+        Some("invalid_tcp_state")
+    } else if max_icmp_time_exceeded_ttl.is_none() {
+        Some("no_icmp")
+    } else {
+        None
+    };
+    reports::probe::DpiCalibrationDebug {
+        method: "post_client_hello".into(),
+        dpi_hop: failure_reason
+            .is_none()
+            .then_some(max_icmp_time_exceeded_ttl)
+            .flatten(),
+        failure_reason: failure_reason.map(str::to_owned),
+        ..Default::default()
+    }
 }
 
 fn finish_capture(
@@ -556,6 +632,90 @@ fn matching_quoted_tcp_tuple(packet: &[u8], local_addr: SocketAddr, target: Sock
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_calibration_preserves_working_boundaries_but_never_invents_zero() {
+        let mut hops = vec![DpiHopProbeHop {
+            ttl: 2,
+            router: Some("192.0.2.1".parse().unwrap()),
+            outcome: DpiHopProbeHopOutcome::IcmpTimeExceeded,
+            tcp_diagnostics: None,
+        }];
+        assert_eq!(legacy_calibration(&hops, Some(2), false).dpi_hop, Some(2));
+        assert_eq!(legacy_calibration(&[], None, false).dpi_hop, None);
+        assert_eq!(legacy_calibration(&hops, Some(2), true).dpi_hop, None);
+        hops.push(DpiHopProbeHop {
+            ttl: 3,
+            router: None,
+            outcome: DpiHopProbeHopOutcome::TcpAcknowledged,
+            tcp_diagnostics: None,
+        });
+        assert_eq!(legacy_calibration(&hops, Some(2), false).dpi_hop, None);
+        hops.last_mut().unwrap().tcp_diagnostics = Some(reports::probe::TcpDiagnostics {
+            connect_error: Some("connection timed out".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            legacy_calibration(&hops, Some(2), false)
+                .failure_reason
+                .as_deref(),
+            Some("connect_error")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires CAP_NET_RAW and local socket access"]
+    fn live_reset_before_payload_triggers_fallback_without_trusting_control_resets() {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            // One legacy attempt, then the fallback's clean/blocked pair.
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut header = [0; 5];
+                stream.read_exact(&mut header).unwrap();
+                let mut hello = vec![0; u16::from_be_bytes([header[3], header[4]]) as usize];
+                stream.read_exact(&mut hello).unwrap();
+                SockRef::from(&stream)
+                    .set_linger(Some(Duration::ZERO))
+                    .unwrap();
+            }
+        });
+        let trace = detect_dpi_hop_blocking(DpiHopProbeConfig {
+            target,
+            max_ttl: 2,
+            collect_tcp_metadata: true,
+            accept_rst_fin_as_timeout: true,
+            ..probe_config()
+        })
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(trace.hops.len(), 1);
+        assert_eq!(trace.calibration.dpi_hop, None);
+        assert_eq!(trace.calibration.method, "rst_client_hello");
+        assert_eq!(
+            trace.calibration.fallback_reason.as_deref(),
+            Some("early_close")
+        );
+        assert_eq!(
+            trace.calibration.failure_reason.as_deref(),
+            Some("control_not_clear_at_reset")
+        );
+        let diagnostics = trace.hops[0].tcp_diagnostics.as_ref().unwrap();
+        assert_eq!(diagnostics.payload_sent, Some(false));
+        assert_eq!(diagnostics.peer_closed_before_payload, Some(true));
+        assert_eq!(diagnostics.junk_sent_ms, None);
+        assert!(
+            diagnostics
+                .packets
+                .iter()
+                .any(|p| p.flags.iter().any(|f| f == "RST"))
+        );
+    }
 
     #[test]
     #[ignore = "requires CAP_NET_RAW and local socket access"]

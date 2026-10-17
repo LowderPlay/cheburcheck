@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "probe"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3013,6 +3013,7 @@ name = "reports"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4685,7 +4686,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "anyhow",
  "deadpool",

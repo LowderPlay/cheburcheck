@@ -42,6 +42,8 @@ struct DpiHops {
     v6: Option<u8>,
     hops_v4: Vec<reports::probe::DpiProbeHop>,
     hops_v6: Vec<reports::probe::DpiProbeHop>,
+    calibration_v4: Option<reports::probe::DpiCalibrationDebug>,
+    calibration_v6: Option<reports::probe::DpiCalibrationDebug>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -345,6 +347,7 @@ async fn main() -> Result<()> {
                             v6: config.dpi_hop_v6,
                             hops_v4: config.dpi_hops_v4.clone(),
                             hops_v6: config.dpi_hops_v6.clone(),
+                            ..Default::default()
                         });
                 publish_status(&client, &status_topic, &args, true, dpi_hops).await?;
                 client.subscribe(CONFIG_TOPIC, QoS::AtLeastOnce).await?;
@@ -523,6 +526,8 @@ async fn run_dpi_command(
                     dpi_hop_v6: hops.v6,
                     dpi_hops_v4: hops.hops_v4.clone(),
                     dpi_hops_v6: hops.hops_v6.clone(),
+                    calibration_v4: hops.calibration_v4.clone(),
+                    calibration_v6: hops.calibration_v6.clone(),
                 },
                 Some(status_hops),
             ))
@@ -572,6 +577,7 @@ async fn run_dpi_command(
                     target,
                     dpi_hop: dpi_hop_from_result(&trace),
                     hops: trace.hops,
+                    calibration: Some(trace.calibration),
                 },
                 None,
             ))
@@ -632,26 +638,47 @@ async fn measure_dpi_hops(config: Option<&DpiProbeConfig>, collect_tcp_metadata:
         v6: v6.0,
         hops_v4: v4.1,
         hops_v6: v6.1,
+        calibration_v4: v4.2,
+        calibration_v6: v6.2,
     }
 }
 
 async fn measure_dpi_hop(
     config: dpi_hop::DpiHopProbeConfig,
-) -> (Option<u8>, Vec<reports::probe::DpiProbeHop>) {
+) -> (
+    Option<u8>,
+    Vec<reports::probe::DpiProbeHop>,
+    Option<reports::probe::DpiCalibrationDebug>,
+) {
     let target = config.target;
     match dpi_hop::detect_dpi_hop(config).await {
-        Ok(result) => (dpi_hop_from_result(&result), result.hops),
+        Ok(result) => (
+            dpi_hop_from_result(&result),
+            result.hops,
+            Some(result.calibration),
+        ),
         Err(error) => {
             warn!("failed to measure DPI hop for {target}: {error}");
-            (None, Vec::new())
+            (
+                None,
+                Vec::new(),
+                Some(reports::probe::DpiCalibrationDebug {
+                    method: "post_client_hello".into(),
+                    failure_reason: Some(error.to_string()),
+                    ..Default::default()
+                }),
+            )
         }
     }
 }
 
 fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
     debug!(
-        "DPI probe completed: target={}, local={}, ClientHello={} bytes",
-        result.target, result.local_addr, result.client_hello_bytes
+        "DPI probe completed: target={}, local={}, ClientHello={} bytes, legacy ICMP hop={:?}",
+        result.target,
+        result.local_addr,
+        result.client_hello_bytes,
+        result.max_icmp_time_exceeded_ttl
     );
     for hop in &result.hops {
         debug!(
@@ -659,19 +686,22 @@ fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
             result.target, hop.ttl, hop.router, hop.outcome
         );
     }
-    if let Some(invalid_hop) = result.hops.iter().find(|hop| {
-        hop.outcome.invalidates_measurement()
-            || hop.tcp_diagnostics.as_ref().is_some_and(|diagnostics| {
-                diagnostics.connect_error.is_some() || diagnostics.send_error.is_some()
-            })
-    }) {
+    debug!(
+        "DPI calibration: method={}, hop={:?}, failure={:?}",
+        result.calibration.method, result.calibration.dpi_hop, result.calibration.failure_reason
+    );
+    if let Some(reason) = &result.calibration.failure_reason {
         warn!(
-            "DPI hop measurement for {} is invalid: {:?} at TTL {}",
-            result.target, invalid_hop.outcome, invalid_hop.ttl
+            "DPI calibration for {} is unknown: method={}, reason={reason}",
+            result.target, result.calibration.method
         );
-        return None;
+    } else if result.calibration.method == "rst_client_hello" {
+        info!(
+            "DPI reset boundary for {}: lower={:?}, upper={:?}",
+            result.target, result.calibration.last_clear_ttl, result.calibration.first_reset_ttl
+        );
     }
-    Some(result.max_icmp_time_exceeded_ttl.unwrap_or(0))
+    result.calibration.dpi_hop
 }
 
 async fn wait_for_connection(eventloop: &mut rumqttc::EventLoop) {
@@ -977,63 +1007,21 @@ mod tests {
     }
 
     #[test]
-    fn direct_tcp_delivery_invalidates_only_its_measurement() {
-        for outcome in [
-            dpi_hop::DpiHopProbeHopOutcome::TcpClosed,
-            dpi_hop::DpiHopProbeHopOutcome::TcpAcknowledged,
-        ] {
-            let result = dpi_hop::DpiHopProbeResult {
-                target: "[2001:db8::10]:443".parse().unwrap(),
-                local_addr: "[2001:db8::1]:45000".parse().unwrap(),
-                client_hello_bytes: 256,
-                max_icmp_time_exceeded_ttl: Some(4),
-                hops: vec![dpi_hop::DpiHopProbeHop {
-                    ttl: 5,
-                    router: None,
-                    outcome,
-                    tcp_diagnostics: None,
-                }],
-            };
-
-            assert_eq!(dpi_hop_from_result(&result), None);
-        }
-    }
-
-    #[test]
-    fn missing_icmp_time_exceeded_defaults_dpi_hop_to_zero() {
+    fn fallback_boundary_is_used_instead_of_the_failed_legacy_trace() {
         let result = dpi_hop::DpiHopProbeResult {
             target: "203.0.113.10:443".parse().unwrap(),
             local_addr: "192.0.2.10:45000".parse().unwrap(),
             client_hello_bytes: 256,
             max_icmp_time_exceeded_ttl: None,
-            hops: vec![dpi_hop::DpiHopProbeHop {
-                ttl: 1,
-                router: None,
-                outcome: dpi_hop::DpiHopProbeHopOutcome::Timeout,
-                tcp_diagnostics: None,
-            }],
+            hops: vec![],
+            calibration: reports::probe::DpiCalibrationDebug {
+                method: "rst_client_hello".into(),
+                dpi_hop: Some(4),
+                last_clear_ttl: Some(3),
+                first_reset_ttl: Some(4),
+                ..Default::default()
+            },
         };
-
-        assert_eq!(dpi_hop_from_result(&result), Some(0));
-    }
-
-    #[test]
-    fn manual_connect_error_is_not_reported_as_dpi_hop_zero() {
-        let result = dpi_hop::DpiHopProbeResult {
-            target: "192.0.2.1:443".parse().unwrap(),
-            local_addr: "0.0.0.0:0".parse().unwrap(),
-            client_hello_bytes: 0,
-            max_icmp_time_exceeded_ttl: None,
-            hops: vec![reports::probe::DpiProbeHop {
-                ttl: 1,
-                router: None,
-                outcome: reports::probe::DpiProbeHopOutcome::Timeout,
-                tcp_diagnostics: Some(reports::probe::TcpDiagnostics {
-                    connect_error: Some("connect timed out".into()),
-                    ..Default::default()
-                }),
-            }],
-        };
-        assert_eq!(dpi_hop_from_result(&result), None);
+        assert_eq!(dpi_hop_from_result(&result), Some(4));
     }
 }
