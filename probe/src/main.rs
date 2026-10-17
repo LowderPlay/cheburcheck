@@ -695,10 +695,17 @@ fn dpi_hop_from_result(result: &dpi_hop::DpiHopProbeResult) -> Option<u8> {
             "DPI calibration for {} is unknown: method={}, reason={reason}",
             result.target, result.calibration.method
         );
-    } else if result.calibration.method == "rst_client_hello" {
+    } else if matches!(
+        result.calibration.method.as_str(),
+        "rst_client_hello" | "silent_drop_client_hello"
+    ) {
         info!(
-            "DPI reset boundary for {}: lower={:?}, upper={:?}",
-            result.target, result.calibration.last_clear_ttl, result.calibration.first_reset_ttl
+            "DPI boundary for {}: method={}, lower={:?}, upper={:?}, control witness={:?}",
+            result.target,
+            result.calibration.method,
+            result.calibration.last_clear_ttl,
+            result.calibration.dpi_hop,
+            result.calibration.control_witness_ttl
         );
     }
     result.calibration.dpi_hop

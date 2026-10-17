@@ -1,4 +1,4 @@
-//! Reset-aware calibration is confined to the calibration destination. Ordinary
+//! Reset- and silent-drop-aware calibration stays on the calibration destination. Ordinary
 //! target tasks still send only the existing TTL-limited TCP probes.
 use super::*;
 use reports::probe::{DpiCalibrationAttempt, DpiCalibrationDebug};
@@ -50,6 +50,35 @@ fn scan(
             let observation = pair(&mut debug, &mut observe, ttl)?;
             if observation.clear() {
                 last_clear = Some(ttl);
+            }
+            // Silence is evidence only with positive ICMP controls on both
+            // sides of a repeatable boundary, never from a lone timeout.
+            if observation.differential_drop() && last_clear.is_some() {
+                let lower = last_clear.unwrap();
+                for _ in 0..REPEATS {
+                    if !pair(&mut debug, &mut observe, lower)?.clear() {
+                        return Err("unstable_lower_boundary".into());
+                    }
+                }
+                for _ in 1..REPEATS {
+                    if !pair(&mut debug, &mut observe, ttl)?.differential_drop() {
+                        return Err("unstable_drop_boundary".into());
+                    }
+                }
+                let higher = ttl
+                    .checked_add(1)
+                    .filter(|higher| *higher <= max_ttl)
+                    .ok_or("no_control_expiry_beyond_drop")?;
+                for _ in 0..REPEATS {
+                    if !pair(&mut debug, &mut observe, higher)?.differential_drop() {
+                        return Err("non_monotonic_drop_boundary".into());
+                    }
+                }
+                debug.method = "silent_drop_client_hello".into();
+                debug.last_clear_ttl = Some(lower);
+                debug.first_drop_ttl = Some(ttl);
+                debug.control_witness_ttl = Some(higher);
+                return Ok(ttl);
             }
             if observation.differential_reset() {
                 let mut witness = observation.control_expired().then_some(ttl);
@@ -120,6 +149,10 @@ impl PairObservation {
 
     fn control_expired(&self) -> bool {
         self.control == "icmp_time_exceeded"
+    }
+
+    fn differential_drop(&self) -> bool {
+        self.control_expired() && self.test == "timeout"
     }
 
     fn differential_reset(&self) -> bool {
@@ -313,6 +346,96 @@ mod tests {
             REPEATS
         );
         assert!(result.attempts.iter().any(|a| a.ttl == 5));
+    }
+
+    #[test]
+    fn silent_drop_recovers_node_40_boundary() {
+        let result = scan(15, |ttl, control| {
+            Ok(sample(
+                ttl,
+                control,
+                if ttl < 8 || control {
+                    "icmp_time_exceeded"
+                } else {
+                    "timeout"
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, Some(8));
+        assert_eq!(result.last_clear_ttl, Some(7));
+        assert_eq!(result.first_drop_ttl, Some(8));
+        assert_eq!(result.first_reset_ttl, None);
+        assert_eq!(result.control_witness_ttl, Some(9));
+        assert_eq!(result.method, "silent_drop_client_hello");
+    }
+
+    #[test]
+    fn transient_drop_and_changing_network_are_rejected() {
+        for changing_lower in [false, true] {
+            let mut counts = std::collections::HashMap::new();
+            let result = scan(6, |ttl, control| {
+                let count = counts.entry((ttl, control)).or_insert(0);
+                *count += 1;
+                let dropped = !control
+                    && ((ttl >= 3 && (changing_lower || *count == 1))
+                        || (changing_lower && ttl == 2 && *count > 1));
+                Ok(sample(
+                    ttl,
+                    control,
+                    if dropped {
+                        "timeout"
+                    } else {
+                        "icmp_time_exceeded"
+                    },
+                ))
+            });
+            assert_eq!(result.dpi_hop, None);
+            assert_eq!(
+                result.failure_reason.as_deref(),
+                Some(if changing_lower {
+                    "unstable_lower_boundary"
+                } else {
+                    "unstable_drop_boundary"
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn silent_drop_must_persist_at_a_higher_ttl() {
+        let result = scan(6, |ttl, control| {
+            Ok(sample(
+                ttl,
+                control,
+                if ttl == 3 && !control {
+                    "timeout"
+                } else {
+                    "icmp_time_exceeded"
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, None);
+        assert_eq!(
+            result.failure_reason.as_deref(),
+            Some("non_monotonic_drop_boundary")
+        );
+    }
+
+    #[test]
+    fn silent_drop_requires_lower_and_higher_positive_controls() {
+        for lower in [false, true] {
+            let result = scan(4, |ttl, control| {
+                let outcome = if lower && ttl < 4 {
+                    "icmp_time_exceeded"
+                } else if control {
+                    "icmp_time_exceeded"
+                } else {
+                    "timeout"
+                };
+                Ok(sample(ttl, control, outcome))
+            });
+            assert_eq!(result.dpi_hop, None);
+        }
     }
 
     #[test]

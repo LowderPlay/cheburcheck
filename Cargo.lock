@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "probe"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4686,7 +4686,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "deadpool",

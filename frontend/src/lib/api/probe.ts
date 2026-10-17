@@ -27,6 +27,7 @@ export type DnsObservation = {
 };
 
 export type ProbeVerdict =
+	| "cdn_block"
 	| "uncertain"
 	| "dns_spoofing"
 	| "sni_block"
@@ -62,12 +63,16 @@ export function displayProbeVerdicts(
 	isStaticCdn: boolean,
 ): DisplayProbeVerdict[] {
 	return probe.verdicts.map((verdict) =>
-		isStaticCdn &&
-		!probe.cdn_unblocked &&
-		probe.host_results?.length !== 0 &&
-		verdict === "ok"
-			? "cdn_block"
-			: verdict,
+		verdict === "cdn_block"
+			? isStaticCdn
+				? "cdn_block"
+				: "ok"
+			: isStaticCdn &&
+					!probe.cdn_unblocked &&
+					probe.host_results?.length !== 0 &&
+					verdict === "ok"
+				? "cdn_block"
+				: verdict,
 	);
 }
 

@@ -64,6 +64,8 @@ pub struct DpiCalibrationDebug {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_reset_ttl: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_drop_ttl: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_witness_ttl: Option<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attempts: Vec<DpiCalibrationAttempt>,

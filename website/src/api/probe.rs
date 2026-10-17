@@ -602,6 +602,15 @@ fn build_host_verdict(
             .filter(|(host, _)| matches!(host.host_type, HostType::Whitelist))
             .collect::<Vec<_>>();
 
+        let most_blacklist_timeouts = !blacklist.is_empty()
+            && is_strict_majority(
+                blacklist.len(),
+                blacklist
+                    .iter()
+                    .filter(|(_, evidence)| matches!(evidence, ProbeEvidence::DataTimeout { .. }))
+                    .count(),
+            );
+
         let most_blacklist_matches_baseline = !blacklist.is_empty()
             && is_strict_majority(
                 blacklist.len(),
@@ -625,7 +634,9 @@ fn build_host_verdict(
                     .count(),
             );
 
-        if most_blacklist_matches_baseline && most_whitelist_good {
+        if most_blacklist_timeouts && most_whitelist_good {
+            "cdn_block"
+        } else if most_blacklist_matches_baseline && most_whitelist_good {
             "ok"
         } else {
             "uncertain"
@@ -943,6 +954,50 @@ mod tests {
         );
         assert_eq!(response["cdn_unblocked"], json!(true));
         assert_eq!(response["verdicts"], json!(["ok"]));
+    }
+
+    #[test]
+    fn cdn_timeouts_are_classified_even_when_network_baseline_changes() {
+        let mut config = empty_config();
+        for (id, host_type) in [
+            ("cdn", HostType::Blacklist),
+            ("control", HostType::Whitelist),
+        ] {
+            config.hosts.push(Host {
+                id: id.into(),
+                host: "192.0.2.1".into(),
+                host_type,
+                file_path: String::new(),
+                timeout_sec: 1,
+                min_data: 1,
+            });
+        }
+        let mut results = vec![
+            HostProbeResult {
+                host_id: "cdn".into(),
+                probe_evidence: ProbeEvidence::DataTimeout { bytes: 16384 },
+            },
+            HostProbeResult {
+                host_id: "control".into(),
+                probe_evidence: ProbeEvidence::Good,
+            },
+        ];
+        for unblocked in [true, false] {
+            assert_eq!(
+                build_probe_verdicts(&results, &config, None, None, None, false, unblocked),
+                vec!["cdn_block"]
+            );
+        }
+        results[1].probe_evidence = ProbeEvidence::ClientHello;
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false, true),
+            vec!["sni_block"]
+        );
+        results[1].probe_evidence = ProbeEvidence::ConnectionError;
+        assert_eq!(
+            build_probe_verdicts(&results, &config, None, None, None, false, true),
+            vec!["uncertain"]
+        );
     }
 
     #[test]
