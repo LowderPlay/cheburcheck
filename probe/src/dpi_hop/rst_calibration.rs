@@ -51,13 +51,14 @@ fn scan(
             if observation.clear() {
                 last_clear = Some(ttl);
             }
-            // Silence is evidence only with positive ICMP controls on both
-            // sides of a repeatable boundary, never from a lone timeout.
-            if observation.differential_drop() && last_clear.is_some() {
-                let lower = last_clear.unwrap();
-                for _ in 0..REPEATS {
-                    if !pair(&mut debug, &mut observe, lower)?.clear() {
-                        return Err("unstable_lower_boundary".into());
+            // Require repeated positive controls at/above the drop. A clear
+            // lower hop is optional: filtering may already act at TTL 1.
+            if observation.differential_drop() {
+                if let Some(lower) = last_clear {
+                    for _ in 0..REPEATS {
+                        if !pair(&mut debug, &mut observe, lower)?.clear() {
+                            return Err("unstable_lower_boundary".into());
+                        }
                     }
                 }
                 for _ in 1..REPEATS {
@@ -75,10 +76,13 @@ fn scan(
                     }
                 }
                 debug.method = "silent_drop_client_hello".into();
-                debug.last_clear_ttl = Some(lower);
+                debug.last_clear_ttl = last_clear;
                 debug.first_drop_ttl = Some(ttl);
                 debug.control_witness_ttl = Some(higher);
-                return Ok(ttl);
+                // First-hop filtering can be tested with TTL 1, so represent
+                // that case as hop 0 (ordinary checks start at dpi_hop + 1).
+                // Keep conservative upper bounds for later/gapped boundaries.
+                return Ok(if ttl == 1 { 0 } else { ttl });
             }
             if observation.differential_reset() {
                 let mut witness = observation.control_expired().then_some(ttl);
@@ -422,20 +426,94 @@ mod tests {
     }
 
     #[test]
-    fn silent_drop_requires_lower_and_higher_positive_controls() {
-        for lower in [false, true] {
-            let result = scan(4, |ttl, control| {
-                let outcome = if lower && ttl < 4 {
-                    "icmp_time_exceeded"
-                } else if control {
+    fn first_hop_silent_drop_is_hop_zero_without_a_lower_observation() {
+        let result = scan(6, |ttl, control| {
+            Ok(sample(
+                ttl,
+                control,
+                if control {
                     "icmp_time_exceeded"
                 } else {
                     "timeout"
-                };
-                Ok(sample(ttl, control, outcome))
-            });
-            assert_eq!(result.dpi_hop, None);
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, Some(0));
+        assert_eq!(result.last_clear_ttl, None);
+        assert_eq!(result.first_drop_ttl, Some(1));
+        assert_eq!(result.control_witness_ttl, Some(2));
+        assert_eq!(result.failure_reason, None);
+        for ttl in [1, 2] {
+            assert_eq!(
+                result
+                    .attempts
+                    .iter()
+                    .filter(|a| a.ttl == ttl && !a.control)
+                    .count(),
+                REPEATS
+            );
         }
+    }
+
+    #[test]
+    fn missing_lower_observation_after_icmp_gaps_keeps_upper_bound() {
+        let result = scan(6, |ttl, control| {
+            Ok(sample(
+                ttl,
+                control,
+                if ttl >= 3 && control {
+                    "icmp_time_exceeded"
+                } else {
+                    "timeout"
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, Some(3));
+        assert_eq!(result.last_clear_ttl, None);
+        assert_eq!(result.first_drop_ttl, Some(3));
+    }
+
+    #[test]
+    fn first_hop_transient_silence_is_rejected() {
+        let mut dropped = false;
+        let result = scan(6, |ttl, control| {
+            let timeout = ttl == 1 && !control && !dropped;
+            dropped |= timeout;
+            Ok(sample(
+                ttl,
+                control,
+                if timeout {
+                    "timeout"
+                } else {
+                    "icmp_time_exceeded"
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, None);
+        assert_eq!(
+            result.failure_reason.as_deref(),
+            Some("unstable_drop_boundary")
+        );
+    }
+
+    #[test]
+    fn silent_drop_still_requires_a_higher_positive_control() {
+        let result = scan(4, |ttl, control| {
+            Ok(sample(
+                ttl,
+                control,
+                if ttl < 4 || control {
+                    "icmp_time_exceeded"
+                } else {
+                    "timeout"
+                },
+            ))
+        });
+        assert_eq!(result.dpi_hop, None);
+        assert_eq!(
+            result.failure_reason.as_deref(),
+            Some("no_control_expiry_beyond_drop")
+        );
     }
 
     #[test]
