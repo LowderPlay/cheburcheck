@@ -1,27 +1,21 @@
 use crate::analytics::Analytics;
+use crate::check_context::CheckContext;
 use rocket::State;
 use rocket::http::Status;
 use rocket_client_addr::ClientRealAddr;
-use uuid::Uuid;
 
-#[post("/feedback/<uuid>/<works>")]
+#[post("/feedback/<id>/<works>")]
 pub async fn feedback(
-    uuid: &str,
+    id: &str,
     works: bool,
+    contexts: &State<CheckContext>,
     analytics: &State<Analytics>,
     addr: &ClientRealAddr,
 ) -> Result<(), Status> {
-    let id = Uuid::try_parse(uuid).map_err(|_| Status::BadRequest)?;
-    let query = analytics
-        .query_by_id(id)
-        .await
-        .map_err(|error| {
-            log::warn!("api: failed to load feedback query {id}: {error}");
-            Status::InternalServerError
-        })?
-        .ok_or(Status::NotFound)?;
+    let context = contexts.verify(id)?;
+    let id = context.query_id;
     analytics
-        .feedback(id, &query.query, &addr.ip.to_string(), works)
+        .feedback(id, &context.target, &addr.ip.to_string(), works)
         .await
         .map_err(|error| {
             log::warn!("api: failed to save feedback for query {id}: {error}");

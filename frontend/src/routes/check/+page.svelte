@@ -29,7 +29,8 @@ const checkQuery = createQuery(() => ({
 	queryKey: ["check", target],
 	queryFn: () => fetchCheck(target),
 	enabled: target.length > 0,
-	staleTime: Infinity,
+	staleTime: 23 * 60 * 60 * 1000,
+	refetchInterval: 23 * 60 * 60 * 1000,
 }));
 
 const queryId = $derived(checkQuery.data?.id);

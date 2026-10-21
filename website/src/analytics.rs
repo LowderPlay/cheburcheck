@@ -11,7 +11,9 @@ mod embedded {
     refinery::embed_migrations!("clickhouse/migrations");
 }
 
+const INSERT_HUMAN_REPORT_SQL: &str = include_str!("../clickhouse/queries/insert_human_report.sql");
 const COMPLAINTS_SQL: &str = include_str!("../clickhouse/queries/complaints.sql");
+#[cfg(test)]
 const QUERY_SQL: &str = include_str!("../clickhouse/queries/query_by_id.sql");
 pub const INSERT_QUERY_SQL: &str = include_str!("../clickhouse/queries/insert_query.sql");
 pub const INSERT_PROBE_REPORT_SQL: &str =
@@ -283,10 +285,12 @@ pub struct Analytics {
     stats_timezone: String,
 }
 
+#[cfg(test)]
 #[derive(klickhouse::Row)]
 pub struct StoredQuery {
     pub query: String,
     pub resolved_ips: Vec<Option<String>>,
+    pub user_agent: Option<String>,
 }
 
 #[derive(klickhouse::Row, serde::Serialize, Debug)]
@@ -381,6 +385,7 @@ impl Analytics {
         connection.finish(result)
     }
 
+    #[cfg(test)]
     pub async fn query_by_id(&self, id: Uuid) -> klickhouse::Result<Option<StoredQuery>> {
         Ok(self.read(QueryBuilder::new(QUERY_SQL).arg(id)).await?.pop())
     }
@@ -402,15 +407,13 @@ impl Analytics {
         works: bool,
     ) -> klickhouse::Result<()> {
         self.execute(
-                QueryBuilder::new(
-                    "INSERT INTO human_reports (query_id, query, source_ip, works) VALUES ($1, $2, $3, $4)",
-                )
+            QueryBuilder::new(INSERT_HUMAN_REPORT_SQL)
                 .arg(id)
                 .arg(query)
                 .arg(source_ip)
                 .arg(works),
-            )
-            .await
+        )
+        .await
     }
 }
 
@@ -772,7 +775,7 @@ mod tests {
             let applied = client
                 .query_one::<Count>("SELECT count() AS count FROM refinery_schema_history")
                 .await?;
-            assert_eq!(applied.count, 1);
+            assert_eq!(applied.count, 2);
             let missing = Uuid::new_v4();
             assert!(analytics.query_by_id(missing).await?.is_none());
             let id = Uuid::new_v4();
@@ -792,11 +795,35 @@ mod tests {
                         .arg(vec![Some("1.2.3.4".to_owned()), None])
                         .arg(Vec::<String>::new())
                         .arg(Vec::<String>::new())
-                        .arg(None::<String>),
+                        .arg(None::<String>)
+                        .arg(Some("Mozilla/5.0 'quoted' \\ agent $1")),
                 )
                 .await?;
             let stored = analytics.query_by_id(id).await?.unwrap();
             assert_eq!(stored.query, target);
+            assert_eq!(
+                stored.user_agent.as_deref(),
+                Some("Mozilla/5.0 'quoted' \\ agent $1")
+            );
+            let legacy_id = Uuid::new_v4();
+            analytics
+                .execute(
+                    QueryBuilder::new(
+                        "INSERT INTO queries (id, query, source_ip) VALUES ($1, $2, $3)",
+                    )
+                    .arg(legacy_id)
+                    .arg("legacy.example")
+                    .arg("1.2.3.4"),
+                )
+                .await?;
+            assert!(
+                analytics
+                    .query_by_id(legacy_id)
+                    .await?
+                    .unwrap()
+                    .user_agent
+                    .is_none()
+            );
             assert_eq!(stored.resolved_ips, vec![Some("1.2.3.4".into()), None]);
             let empty = analytics.complaints(target).await?;
             assert_eq!(empty.len(), 14);

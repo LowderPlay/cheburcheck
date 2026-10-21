@@ -1877,6 +1877,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "9.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
+dependencies = [
+ "base64",
+ "js-sys",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "klickhouse"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4526,6 +4539,7 @@ checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 
@@ -4686,13 +4700,14 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = [
  "anyhow",
  "deadpool",
  "dotenvy",
  "env_logger",
  "governor",
+ "jsonwebtoken",
  "klickhouse",
  "log",
  "percent-encoding",

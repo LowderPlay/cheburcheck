@@ -1,5 +1,6 @@
 use super::rate_limit::ProbeRateLimiter;
 use crate::analytics::Analytics;
+use crate::check_context::CheckContext;
 use crate::mqtt::{MqttPublisher, PublishError};
 use klickhouse::QueryBuilder;
 use log::warn;
@@ -18,7 +19,6 @@ use rocket_client_addr::ClientRealAddr;
 use sqlx::postgres::PgPool;
 use sqlx::types::Uuid;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -114,6 +114,7 @@ pub struct ProbeReporterInfo {
 pub async fn probe_query(
     id: &str,
     token: Option<&str>,
+    contexts: &State<CheckContext>,
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
     analytics: &State<Analytics>,
@@ -125,17 +126,9 @@ pub async fn probe_query(
         return Err(Status::TooManyRequests);
     }
 
-    let id = Uuid::try_parse(id).map_err(|_| Status::BadRequest)?;
-    let stored_query = analytics
-        .query_by_id(id)
-        .await
-        .map_err(|error| {
-            warn!("api: failed to load probe query {id}: {error}");
-            Status::InternalServerError
-        })?
-        .ok_or(Status::NotFound)?;
-    let query = stored_query.query;
-    let resolved_ips = stored_query.resolved_ips;
+    let context = contexts.verify(id)?;
+    let id = context.query_id;
+    let query = context.target;
     let target = Target::from(query.trim());
     let domain = match &target {
         Target::Domain(domain) => Some(domain.as_str()),
@@ -149,11 +142,7 @@ pub async fn probe_query(
     if domain.is_none() && !probe_config.traceroute_enabled {
         return Err(Status::BadRequest);
     }
-    let ip = resolved_ips
-        .first()
-        .and_then(|ip| ip.as_ref())
-        .and_then(|ip| ip.parse::<IpAddr>().ok())
-        .ok_or(Status::BadRequest)?;
+    let ip = context.ip.ok_or(Status::BadRequest)?;
     if Target::is_bogon(ip) {
         return Err(Status::Forbidden);
     }

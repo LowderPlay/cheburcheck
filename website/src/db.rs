@@ -18,6 +18,7 @@ pub async fn save_query(
     target: &Target,
     check: &Check,
     addr: &ClientRealAddr,
+    user_agent: Option<&str>,
     checker: RwLockReadGuard<'_, Checker>,
 ) -> Result<Uuid, klickhouse::KlickhouseError> {
     let (cdn_networks, cdn_providers, rkn_domain): (Vec<_>, Vec<_>, Option<_>) =
@@ -73,7 +74,8 @@ pub async fn save_query(
                 .arg(resolved_ips)
                 .arg(cdn_networks)
                 .arg(cdn_providers)
-                .arg(rkn_domain),
+                .arg(rkn_domain)
+                .arg(user_agent),
         )
         .await?;
 

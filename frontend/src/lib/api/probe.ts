@@ -131,7 +131,9 @@ export function startProbeSSE(
 	const params = new URLSearchParams();
 	if (token) params.set("token", token);
 	const query = params.size > 0 ? `?${params.toString()}` : "";
-	const eventSource = new EventSource(`/api/v1/probe/${id}${query}`);
+	const eventSource = new EventSource(
+		`/api/v1/probe/${encodeURIComponent(id)}${query}`,
+	);
 
 	eventSource.addEventListener("started", (event) => {
 		const data = JSON.parse(event.data);

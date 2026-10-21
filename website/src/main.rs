@@ -4,6 +4,7 @@ mod admin;
 mod agency;
 mod analytics;
 mod api;
+mod check_context;
 mod database_refresh;
 mod db;
 mod mqtt;
@@ -106,6 +107,8 @@ async fn rocket() -> _ {
         .await
         .expect("Failed to create database pool");
 
+    let check_context =
+        check_context::CheckContext::from_env().expect("failed to configure check context signing");
     let analytics = analytics::Analytics::connect_from_env()
         .await
         .expect("Failed to configure ClickHouse analytics");
@@ -114,6 +117,7 @@ async fn rocket() -> _ {
         .manage(checker)
         .manage(pool)
         .manage(analytics)
+        .manage(check_context)
         .manage(api_limiter)
         .manage(probe_limiter)
         .manage(probe_update_download_limiter)
