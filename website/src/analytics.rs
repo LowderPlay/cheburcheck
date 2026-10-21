@@ -858,6 +858,9 @@ mod tests {
                         .arg(1234_i64),
                 )
                 .await?;
+            // Probe inserts acknowledge buffering, so flush explicitly before
+            // checking persistence in this disposable integration-test server.
+            client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let probe = client
                 .query_one::<StoredProbe>(
                     "SELECT query_id, result, verdicts, duration_ms FROM probe_reports",
