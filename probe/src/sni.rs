@@ -5,7 +5,6 @@ use reports::probe::{Host, HostProbeResult, ProbeConfig, ProbeEvidence};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error as TlsError, SignatureScheme};
-use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -63,9 +62,11 @@ async fn probe_host(host: &Host, target: &str) -> ProbeEvidence {
 
     let mut tls = match time::timeout(timeout, connector.connect(server_name, tcp)).await {
         Ok(Ok(tls)) => tls,
-        Ok(Err(e)) if e.kind() == io::ErrorKind::InvalidData => {
+        Ok(Err(e)) => {
             debug!("TLS handshake error for host {}: {:?}", host.host, e);
-            return ProbeEvidence::ConnectionError;
+            // TCP connected; malformed TLS responses and alerts belong to the
+            // ClientHello stage, just like handshake resets and timeouts.
+            return ProbeEvidence::ClientHello;
         }
         _ => return ProbeEvidence::ClientHello,
     };

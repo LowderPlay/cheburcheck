@@ -1,6 +1,6 @@
 [package]
 name = "website"
-version = "1.5.4"
+version = "1.5.5"
 edition = "2024"
 
 [dependencies]

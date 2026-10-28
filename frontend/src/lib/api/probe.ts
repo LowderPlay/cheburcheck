@@ -62,7 +62,7 @@ export function displayProbeVerdicts(
 	probe: ProbeResult,
 	isStaticCdn: boolean,
 ): DisplayProbeVerdict[] {
-	return probe.verdicts.map((verdict) =>
+	const verdicts = probe.verdicts.map((verdict) =>
 		verdict === "cdn_block"
 			? isStaticCdn
 				? "cdn_block"
@@ -74,6 +74,16 @@ export function displayProbeVerdicts(
 				? "cdn_block"
 				: verdict,
 	);
+	const hasBlockingVerdict = verdicts.some(
+		(verdict) =>
+			verdict === "tspu_block" ||
+			verdict === "sni_block" ||
+			verdict === "dns_spoofing" ||
+			verdict === "cdn_block",
+	);
+	return hasBlockingVerdict
+		? verdicts.filter((verdict) => verdict !== "ok")
+		: verdicts;
 }
 
 const verdictPriority: DisplayProbeVerdict[] = [
