@@ -41,6 +41,7 @@ export type ResolvedProbeVerdict = Exclude<DisplayProbeVerdict, "uncertain">;
 export type ProbeResult = {
 	job_id: string;
 	probe_id: string;
+	cached: boolean;
 	region?: string | null;
 	provider?: string | null;
 	asn?: string | null;

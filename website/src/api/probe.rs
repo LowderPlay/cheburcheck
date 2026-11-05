@@ -32,6 +32,15 @@ struct CachedProbeResponse {
     stored_at: Instant,
 }
 
+impl CachedProbeResponse {
+    fn replay_response(&self, job_id: &str) -> Value {
+        let mut response = self.response.clone();
+        response["job_id"] = json!(job_id);
+        response["cached"] = json!(true);
+        response
+    }
+}
+
 pub struct ProbeResponseCache {
     ttl: Duration,
     entries: Mutex<HashMap<(String, String), CachedProbeResponse>>,
@@ -53,27 +62,22 @@ impl ProbeResponseCache {
         }
     }
 
-    async fn get_all(
+    async fn partition(
         &self,
         target: &str,
         probe_ids: &[String],
-    ) -> Option<Vec<(String, CachedProbeResponse)>> {
+    ) -> (Vec<(String, CachedProbeResponse)>, Vec<String>) {
         let mut entries = self.entries.lock().await;
         entries.retain(|_, entry| entry.stored_at.elapsed() < self.ttl);
-        probe_ids
-            .iter()
-            .map(|probe_id| {
-                let entry = entries.get(&(target.to_owned(), probe_id.clone()))?;
-                Some((probe_id.clone(), entry.clone()))
-            })
-            .collect()
-    }
-
-    async fn invalidate_target(&self, target: &str) {
-        self.entries
-            .lock()
-            .await
-            .retain(|(cached_target, _), _| cached_target != target);
+        let mut cached = Vec::new();
+        let mut missing = Vec::new();
+        for probe_id in probe_ids {
+            match entries.get(&(target.to_owned(), probe_id.clone())) {
+                Some(entry) => cached.push((probe_id.clone(), entry.clone())),
+                None => missing.push(probe_id.clone()),
+            }
+        }
+        (cached, missing)
     }
 
     async fn insert(
@@ -154,23 +158,8 @@ pub async fn probe_query(
         mqtt.online_probe_ids(&eligible_probes).await
     };
     let cache_target = target.to_query().to_ascii_lowercase();
-    let cached = if target_probe.is_some() {
-        None
-    } else {
-        cache.get_all(&cache_target, &active_probes).await
-    };
-    let (cached, expected_probes) = match cached {
-        Some(cached) => (cached, HashSet::new()),
-        None => {
-            if target_probe.is_none() {
-                cache.invalidate_target(&cache_target).await;
-            }
-            (
-                Vec::new(),
-                active_probes.into_iter().collect::<HashSet<_>>(),
-            )
-        }
-    };
+    let (cached, missing_probes) = cache.partition(&cache_target, &active_probes).await;
+    let expected_probes = missing_probes.iter().cloned().collect::<HashSet<_>>();
     let online_probes = cached.len() + expected_probes.len();
 
     let results = if expected_probes.is_empty() {
@@ -181,12 +170,14 @@ pub async fn probe_query(
             publish_error_status(error)
         })?;
         let published_at = Instant::now();
-        mqtt.publish_probe_task(id, domain, ip, target_probe.as_deref())
-            .await
-            .map_err(|error| {
-                warn!("api: failed to publish probe task for {id}: {error}");
-                publish_error_status(error)
-            })?;
+        for probe_id in &missing_probes {
+            mqtt.publish_probe_task(id, domain, ip, Some(probe_id))
+                .await
+                .map_err(|error| {
+                    warn!("api: failed to publish probe task for {id} to {probe_id}: {error}");
+                    publish_error_status(error)
+                })?;
+        }
         Some((receiver, published_at))
     };
 
@@ -207,12 +198,12 @@ pub async fn probe_query(
             "online_probes": online_probes,
         }).to_string()).event("started");
 
-        for (probe_id, mut entry) in cached {
-            entry.response["job_id"] = json!(id);
+        for (probe_id, entry) in cached {
+            let response = entry.replay_response(&id);
             if let Err(error) = insert_probe_report(
                 query_id,
                 &query,
-                &entry.response,
+                &response,
                 entry.target_traceroute.as_ref(),
                 entry.duration_ms,
                 &analytics,
@@ -220,7 +211,7 @@ pub async fn probe_query(
                 warn!("api: failed to save cached probe report for query {id}: {error}");
             }
             responded_probes.insert(probe_id);
-            yield Event::data(entry.response.to_string()).event("result");
+            yield Event::data(response.to_string()).event("result");
         }
 
         if let Some((mut results, published_at)) = results {
@@ -234,7 +225,9 @@ pub async fn probe_query(
                     result = results.recv() => {
                         match result {
                             Ok(mut result) => {
-                                if !expected_probes.contains(&result.probe_id) {
+                                if !expected_probes.contains(&result.probe_id)
+                                    || responded_probes.contains(&result.probe_id)
+                                {
                                     continue;
                                 }
                                 let duration_ms = u64::try_from(published_at.elapsed().as_millis())
@@ -272,15 +265,13 @@ pub async fn probe_query(
                                 ).await {
                                     warn!("api: failed to save probe report for query {id}: {error}");
                                 }
-                                if target_probe.is_none() {
-                                    cache.insert(
-                                        &cache_target,
-                                        &result_probe_id,
-                                        response.clone(),
-                                        target_traceroute,
-                                        duration_ms,
-                                    ).await;
-                                }
+                                cache.insert(
+                                    &cache_target,
+                                    &result_probe_id,
+                                    response.clone(),
+                                    target_traceroute,
+                                    duration_ms,
+                                ).await;
                                 yield Event::data(response.to_string()).event("result");
                             }
                             Err(rocket::tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -396,6 +387,7 @@ pub fn build_probe_response(
     json!({
         "job_id": raw.job_id,
         "probe_id": raw.probe_id,
+        "cached": false,
         "region": region,
         "provider": provider,
         "asn": asn,
@@ -449,7 +441,13 @@ async fn insert_probe_report(
                 .arg(response.to_string())
                 .arg(target_hop_count)
                 .arg(target_trace_result)
-                .arg(duration_ms),
+                .arg(duration_ms)
+                .arg(
+                    response
+                        .get("cached")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                ),
         )
         .await?;
 
@@ -667,7 +665,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_is_scoped_by_target_and_probe_and_expires() {
+    fn replay_marks_response_cached_without_changing_the_original_measurement() {
+        let response = build_probe_response(
+            ProbeResultEvent {
+                job_id: "original".into(),
+                probe_id: "42".into(),
+                host_results: vec![],
+                target_traceroute: None,
+                dpi_hop: None,
+                dns: None,
+            },
+            &empty_config(),
+            None,
+            false,
+        );
+        assert_eq!(response["cached"], json!(false));
+        let entry = CachedProbeResponse {
+            response,
+            target_traceroute: None,
+            duration_ms: 123,
+            stored_at: Instant::now(),
+        };
+        let replay = entry.replay_response("current");
+        assert_eq!(replay["cached"], json!(true));
+        assert_eq!(replay["job_id"], json!("current"));
+        assert_eq!(replay["probe_id"], json!("42"));
+        assert_eq!(entry.response["cached"], json!(false));
+        assert_eq!(entry.response["job_id"], json!("original"));
+    }
+
+    #[test]
+    fn cache_replays_hits_and_requests_only_missing_or_expired_probes() {
         rocket::tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -677,26 +705,24 @@ mod tests {
                 cache
                     .insert("example.org", "42", json!({"job_id": "old"}), None, 123)
                     .await;
-                assert_eq!(
-                    cache.get_all("example.org", &["42".into()]).await.unwrap()[0]
-                        .1
-                        .duration_ms,
-                    123
-                );
-                assert!(cache.get_all("other.org", &["42".into()]).await.is_none());
-                assert!(cache.get_all("example.org", &["43".into()]).await.is_none());
-                assert!(
-                    cache
-                        .get_all("example.org", &["42".into(), "43".into()])
-                        .await
-                        .is_none()
-                );
+                let probes = vec!["42".into(), "43".into()];
+                let (cached, missing) = cache.partition("example.org", &probes).await;
+                assert_eq!(cached.len(), 1);
+                assert_eq!(cached[0].0, "42");
+                assert_eq!(cached[0].1.duration_ms, 123);
+                assert_eq!(missing, vec!["43"]);
+                let (cached, missing) = cache.partition("other.org", &probes).await;
+                assert!(cached.is_empty());
+                assert_eq!(missing, probes);
                 cache
                     .insert("other.org", "42", json!({"job_id": "other"}), None, 456)
                     .await;
-                cache.invalidate_target("other.org").await;
-                assert!(cache.get_all("other.org", &["42".into()]).await.is_none());
-                assert!(cache.get_all("example.org", &["42".into()]).await.is_some());
+                cache
+                    .insert("example.org", "43", json!({"job_id": "new"}), None, 789)
+                    .await;
+                let (cached, missing) = cache.partition("example.org", &probes).await;
+                assert_eq!(cached.len(), 2);
+                assert!(missing.is_empty());
 
                 cache
                     .entries
@@ -705,7 +731,16 @@ mod tests {
                     .get_mut(&("example.org".into(), "42".into()))
                     .unwrap()
                     .stored_at = Instant::now() - Duration::from_secs(11);
-                assert!(cache.get_all("example.org", &["42".into()]).await.is_none());
+                let (cached, missing) = cache.partition("example.org", &probes).await;
+                assert_eq!(cached.len(), 1);
+                assert_eq!(cached[0].0, "43");
+                assert_eq!(missing, vec!["42"]);
+                let (cached, missing) = cache.partition("other.org", &["42".into()]).await;
+                assert_eq!(cached[0].1.duration_ms, 456);
+                assert!(missing.is_empty());
+                let (cached, missing) = cache.partition("example.org", &[]).await;
+                assert!(cached.is_empty());
+                assert!(missing.is_empty());
             });
     }
 
@@ -718,7 +753,9 @@ mod tests {
             .block_on(async {
                 let cache = ProbeResponseCache::new(Duration::ZERO);
                 cache.insert("example.org", "42", json!({}), None, 0).await;
-                assert!(cache.get_all("example.org", &["42".into()]).await.is_none());
+                let (cached, missing) = cache.partition("example.org", &["42".into()]).await;
+                assert!(cached.is_empty());
+                assert_eq!(missing, vec!["42"]);
                 assert!(cache.entries.lock().await.is_empty());
             });
     }

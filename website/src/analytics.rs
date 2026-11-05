@@ -477,6 +477,7 @@ mod tests {
         result: String,
         verdicts: Vec<Option<String>>,
         duration_ms: Option<i64>,
+        cached: bool,
     }
 
     async fn test_analytics(settings: PoolSettings) -> Result<Analytics> {
@@ -855,7 +856,8 @@ mod tests {
                         .arg(json)
                         .arg(None::<i16>)
                         .arg(None::<String>)
-                        .arg(1234_i64),
+                        .arg(1234_i64)
+                        .arg(true),
                 )
                 .await?;
             // Probe inserts acknowledge buffering, so flush explicitly before
@@ -863,13 +865,14 @@ mod tests {
             client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let probe = client
                 .query_one::<StoredProbe>(
-                    "SELECT query_id, result, verdicts, duration_ms FROM probe_reports",
+                    "SELECT query_id, result, verdicts, duration_ms, cached FROM probe_reports",
                 )
                 .await?;
             assert_eq!(probe.query_id, id);
             assert_eq!(probe.result, json);
             assert_eq!(probe.verdicts, vec![Some("blocked".into())]);
             assert_eq!(probe.duration_ms, Some(1234));
+            assert!(probe.cached);
             let available_before = analytics.pool.inner.status().available;
             assert!(
                 analytics

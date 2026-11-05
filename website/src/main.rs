@@ -78,11 +78,26 @@ async fn rocket() -> _ {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2);
-    let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
-    let probe_limiter = std::sync::Arc::new(api::build_probe_rate_limiter(probe_rate_limit_rpm));
-    let probe_update_download_limiter = std::sync::Arc::new(
-        api::build_probe_update_download_rate_limiter(probe_update_download_rate_limit_rpm),
-    );
+    let burst_from_env = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(1)
+    };
+    let api_limiter = std::sync::Arc::new(api::build_rate_limiter(
+        rate_limit_rpm,
+        burst_from_env("API_RATE_LIMIT_BURST"),
+    ));
+    let probe_limiter = std::sync::Arc::new(api::build_probe_rate_limiter(
+        probe_rate_limit_rpm,
+        burst_from_env("PROBE_RATE_LIMIT_BURST"),
+    ));
+    let probe_update_download_limiter =
+        std::sync::Arc::new(api::build_probe_update_download_rate_limiter(
+            probe_update_download_rate_limit_rpm,
+            burst_from_env("PROBE_UPDATE_DOWNLOAD_RATE_LIMIT_BURST"),
+        ));
     let mqtt_publisher = mqtt::MqttPublisher::start_from_env();
     let probe_response_cache = std::sync::Arc::new(api::ProbeResponseCache::from_env());
     let probe_update_proxy = probe_updates::ProbeUpdateProxy::from_env()
