@@ -196,6 +196,9 @@ const reloadProbeConfig = createMutation(() => ({
 			"POST",
 		),
 }));
+const clearProbeCache = createMutation(() => ({
+	mutationFn: () => api<{ removed: number }>("/probe-cache/clear", "POST"),
+}));
 const requestUpdateCheck = createMutation(() => ({
 	mutationFn: (id: number | null) =>
 		api<{ requested: boolean }>(
@@ -383,7 +386,20 @@ async function reloadConfig() {
 	notice = "";
 	try {
 		const config = await reloadProbeConfig.mutateAsync();
-		notice = `Конфигурация отправлена: ${config.hosts.length} хостов, ${new Date(config.published_at).toLocaleString("ru-RU")}`;
+		notice = `Конфигурация отправлена: ${config.hosts.length} хостов, ${new Date(config.published_at).toLocaleString("ru-RU")}. Кеш ответов очищен.`;
+	} catch (e) {
+		error = String(e instanceof Error ? e.message : e);
+	} finally {
+		busy = "";
+	}
+}
+async function clearCache() {
+	busy = "clear-cache";
+	error = "";
+	notice = "";
+	try {
+		const { removed } = await clearProbeCache.mutateAsync();
+		notice = `Кеш ответов очищен. Удалено записей: ${removed}.`;
 	} catch (e) {
 		error = String(e instanceof Error ? e.message : e);
 	} finally {
@@ -667,6 +683,15 @@ const outcomeLabel: Record<string, string> = {
 			>
 				<RadioTower size={16} />
 				Перезагрузить probe-hosts.toml
+			</button>
+			<button
+				type="button"
+				class="btn flex items-center gap-2"
+				onclick={() => void clearCache()}
+				disabled={busy !== ""}
+			>
+				<Trash2 size={16} />
+				{busy === "clear-cache" ? "Очистка кеша…" : "Очистить кеш ответов"}
 			</button>
 			<button
 				type="button"

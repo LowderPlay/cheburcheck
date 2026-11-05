@@ -20,6 +20,7 @@ use sqlx::postgres::PgPool;
 use sqlx::types::Uuid;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const DEFAULT_PROBE_RESPONSE_CACHE_SECONDS: u64 = 3 * 60 * 60;
@@ -44,6 +45,7 @@ impl CachedProbeResponse {
 pub struct ProbeResponseCache {
     ttl: Duration,
     entries: Mutex<HashMap<(String, String), CachedProbeResponse>>,
+    generation: AtomicU64,
 }
 
 impl ProbeResponseCache {
@@ -59,14 +61,24 @@ impl ProbeResponseCache {
         Self {
             ttl,
             entries: Mutex::new(HashMap::new()),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    pub async fn clear(&self) -> usize {
+        let mut entries = self.entries.lock().await;
+        let removed = entries.len();
+        entries.clear();
+        // Requests already in flight must not repopulate the cleared cache.
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        removed
     }
 
     async fn partition(
         &self,
         target: &str,
         probe_ids: &[String],
-    ) -> (Vec<(String, CachedProbeResponse)>, Vec<String>) {
+    ) -> (Vec<(String, CachedProbeResponse)>, Vec<String>, u64) {
         let mut entries = self.entries.lock().await;
         entries.retain(|_, entry| entry.stored_at.elapsed() < self.ttl);
         let mut cached = Vec::new();
@@ -77,7 +89,7 @@ impl ProbeResponseCache {
                 None => missing.push(probe_id.clone()),
             }
         }
-        (cached, missing)
+        (cached, missing, self.generation.load(Ordering::Relaxed))
     }
 
     async fn insert(
@@ -87,11 +99,15 @@ impl ProbeResponseCache {
         response: Value,
         target_traceroute: Option<TcpTracerouteResult>,
         duration_ms: u64,
+        generation: u64,
     ) {
         if self.ttl.is_zero() {
             return;
         }
         let mut entries = self.entries.lock().await;
+        if generation != self.generation.load(Ordering::Relaxed) {
+            return;
+        }
         entries.retain(|_, entry| entry.stored_at.elapsed() < self.ttl);
         entries.insert(
             (target.to_owned(), probe_id.to_owned()),
@@ -158,7 +174,8 @@ pub async fn probe_query(
         mqtt.online_probe_ids(&eligible_probes).await
     };
     let cache_target = target.to_query().to_ascii_lowercase();
-    let (cached, missing_probes) = cache.partition(&cache_target, &active_probes).await;
+    let (cached, missing_probes, cache_generation) =
+        cache.partition(&cache_target, &active_probes).await;
     let expected_probes = missing_probes.iter().cloned().collect::<HashSet<_>>();
     let online_probes = cached.len() + expected_probes.len();
 
@@ -271,6 +288,7 @@ pub async fn probe_query(
                                     response.clone(),
                                     target_traceroute,
                                     duration_ms,
+                                    cache_generation,
                                 ).await;
                                 yield Event::data(response.to_string()).event("result");
                             }
@@ -703,24 +721,24 @@ mod tests {
             .block_on(async {
                 let cache = ProbeResponseCache::new(Duration::from_secs(10));
                 cache
-                    .insert("example.org", "42", json!({"job_id": "old"}), None, 123)
+                    .insert("example.org", "42", json!({"job_id": "old"}), None, 123, 0)
                     .await;
                 let probes = vec!["42".into(), "43".into()];
-                let (cached, missing) = cache.partition("example.org", &probes).await;
+                let (cached, missing, _) = cache.partition("example.org", &probes).await;
                 assert_eq!(cached.len(), 1);
                 assert_eq!(cached[0].0, "42");
                 assert_eq!(cached[0].1.duration_ms, 123);
                 assert_eq!(missing, vec!["43"]);
-                let (cached, missing) = cache.partition("other.org", &probes).await;
+                let (cached, missing, _) = cache.partition("other.org", &probes).await;
                 assert!(cached.is_empty());
                 assert_eq!(missing, probes);
                 cache
-                    .insert("other.org", "42", json!({"job_id": "other"}), None, 456)
+                    .insert("other.org", "42", json!({"job_id": "other"}), None, 456, 0)
                     .await;
                 cache
-                    .insert("example.org", "43", json!({"job_id": "new"}), None, 789)
+                    .insert("example.org", "43", json!({"job_id": "new"}), None, 789, 0)
                     .await;
-                let (cached, missing) = cache.partition("example.org", &probes).await;
+                let (cached, missing, _) = cache.partition("example.org", &probes).await;
                 assert_eq!(cached.len(), 2);
                 assert!(missing.is_empty());
 
@@ -731,14 +749,14 @@ mod tests {
                     .get_mut(&("example.org".into(), "42".into()))
                     .unwrap()
                     .stored_at = Instant::now() - Duration::from_secs(11);
-                let (cached, missing) = cache.partition("example.org", &probes).await;
+                let (cached, missing, _) = cache.partition("example.org", &probes).await;
                 assert_eq!(cached.len(), 1);
                 assert_eq!(cached[0].0, "43");
                 assert_eq!(missing, vec!["42"]);
-                let (cached, missing) = cache.partition("other.org", &["42".into()]).await;
+                let (cached, missing, _) = cache.partition("other.org", &["42".into()]).await;
                 assert_eq!(cached[0].1.duration_ms, 456);
                 assert!(missing.is_empty());
-                let (cached, missing) = cache.partition("example.org", &[]).await;
+                let (cached, missing, _) = cache.partition("example.org", &[]).await;
                 assert!(cached.is_empty());
                 assert!(missing.is_empty());
             });
@@ -752,12 +770,46 @@ mod tests {
             .unwrap()
             .block_on(async {
                 let cache = ProbeResponseCache::new(Duration::ZERO);
-                cache.insert("example.org", "42", json!({}), None, 0).await;
-                let (cached, missing) = cache.partition("example.org", &["42".into()]).await;
+                cache
+                    .insert("example.org", "42", json!({}), None, 0, 0)
+                    .await;
+                let (cached, missing, _) = cache.partition("example.org", &["42".into()]).await;
                 assert!(cached.is_empty());
                 assert_eq!(missing, vec!["42"]);
                 assert!(cache.entries.lock().await.is_empty());
             });
+    }
+
+    #[rocket::async_test]
+    async fn clearing_cache_removes_all_targets_and_rejects_in_flight_results() {
+        let cache = ProbeResponseCache::new(Duration::from_secs(60));
+        let probes = vec!["42".into(), "43".into()];
+        let (_, _, old_generation) = cache.partition("example.org", &probes).await;
+        cache
+            .insert("example.org", "42", json!({}), None, 123, old_generation)
+            .await;
+        cache
+            .insert("other.org", "43", json!({}), None, 456, old_generation)
+            .await;
+        assert_eq!(cache.clear().await, 2);
+        // A response started before the clear must not restore stale data.
+        cache
+            .insert("example.org", "42", json!({}), None, 123, old_generation)
+            .await;
+        for target in ["example.org", "other.org"] {
+            let (cached, missing, _) = cache.partition(target, &probes).await;
+            assert!(cached.is_empty());
+            assert_eq!(missing, probes);
+        }
+        let (_, _, generation) = cache.partition("example.org", &probes).await;
+        cache
+            .insert("example.org", "42", json!({}), None, 789, generation)
+            .await;
+        let (cached, missing, _) = cache.partition("example.org", &probes).await;
+        assert_eq!(cached[0].1.duration_ms, 789);
+        assert_eq!(missing, vec!["43"]);
+        assert_eq!(cache.clear().await, 1);
+        assert_eq!(cache.clear().await, 0);
     }
 
     #[test]

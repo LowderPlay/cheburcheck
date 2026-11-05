@@ -161,6 +161,7 @@ async fn rocket() -> _ {
                 admin::update,
                 admin::remove,
                 admin::reload,
+                admin::clear_probe_cache,
                 admin::update_all_probes,
                 admin::update_one_probe,
                 admin::command

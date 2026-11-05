@@ -1,3 +1,4 @@
+use crate::api::ProbeResponseCache;
 use crate::mqtt::{MqttPublisher, ProbeStatusSnapshot};
 use rand::distr::{Alphanumeric, SampleString};
 use reports::probe::{ProbeCommand, ProbeCommandResult};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use sqlx::types::chrono::{DateTime, Utc};
 use std::net::IpAddr;
+use std::sync::Arc;
 
 pub struct Admin;
 
@@ -233,11 +235,29 @@ pub async fn remove(
 pub async fn reload(
     _admin: Admin,
     mqtt: &State<MqttPublisher>,
+    cache: &State<Arc<ProbeResponseCache>>,
 ) -> Result<Json<reports::probe::ProbeConfig>, Status> {
-    mqtt.reload_probe_config()
+    let config = mqtt
+        .reload_probe_config()
         .await
-        .map(Json)
-        .map_err(|_| Status::InternalServerError)
+        .map_err(|_| Status::InternalServerError)?;
+    cache.clear().await;
+    Ok(Json(config))
+}
+
+#[derive(Serialize)]
+pub struct ClearedProbeCache {
+    removed: usize,
+}
+
+#[post("/probe-cache/clear")]
+pub async fn clear_probe_cache(
+    _admin: Admin,
+    cache: &State<Arc<ProbeResponseCache>>,
+) -> Json<ClearedProbeCache> {
+    Json(ClearedProbeCache {
+        removed: cache.clear().await,
+    })
 }
 
 #[derive(Serialize)]
