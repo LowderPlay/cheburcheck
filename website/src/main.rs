@@ -127,6 +127,7 @@ async fn rocket() -> _ {
     let analytics = analytics::Analytics::connect_from_env()
         .await
         .expect("Failed to configure ClickHouse analytics");
+    rocket::tokio::spawn(api::cleanup_expired_shares(pool.clone()));
 
     rocket::build()
         .manage(checker)
@@ -147,6 +148,8 @@ async fn rocket() -> _ {
                 api::probe_query,
                 api::healthcheck,
                 api::feedback,
+                api::create_share,
+                api::get_share,
                 api::get_system_status,
                 api::node_stats,
                 whitelist::histogram
