@@ -5,13 +5,16 @@ mod feedback_endpoint;
 #[path = "api/node_stats.rs"]
 mod nodes_endpoint;
 mod probe;
+#[path = "api/share.rs"]
+mod share;
 mod rate_limit;
 mod status;
 
-pub use check_endpoint::check;
+pub use check_endpoint::{build_shared_check_result, check};
 pub use feedback_endpoint::feedback;
 pub use nodes_endpoint::node_stats;
 pub use probe::{ProbeResponseCache, probe_query};
+pub use share::{cleanup_expired_shares, create_share, get_share};
 pub use rate_limit::{
     ProbeUpdateDownloadRateLimiter, build_probe_rate_limiter,
     build_probe_update_download_rate_limiter, build_rate_limiter,

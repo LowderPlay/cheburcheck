@@ -13,6 +13,7 @@ import EmptyResult from "$lib/components/EmptyResult.svelte";
 import ErrorMessage from "$lib/components/ErrorMessage.svelte";
 import FeedbackPopover from "$lib/components/FeedbackPopover.svelte";
 import ResultPanel from "$lib/components/ResultPanel.svelte";
+import ResultActions from "$lib/components/ResultActions.svelte";
 import ProbeTable from "$lib/components/result/ProbeTable.svelte";
 import SearchForm from "$lib/components/SearchForm.svelte";
 
@@ -35,6 +36,7 @@ const checkQuery = createQuery(() => ({
 
 const queryId = $derived(checkQuery.data?.id);
 const shouldProbe = $derived(!!queryId);
+let probeRun = $state(0);
 
 function createInitialProbeData(id: string): ProbeQueryData {
 	return {
@@ -59,6 +61,7 @@ const probeQuery = createQuery(() => ({
 
 $effect(() => {
 	if (!queryId || !shouldProbe) return;
+	const run = probeRun;
 
 	queryClient.setQueryData<ProbeQueryData>(
 		["probes", queryId, token],
@@ -69,6 +72,7 @@ $effect(() => {
 		queryId,
 		token,
 		(result) => {
+			if (run !== probeRun) return;
 			queryClient.setQueryData<ProbeQueryData>(
 				["probes", queryId, token],
 				(old) => {
@@ -94,6 +98,7 @@ $effect(() => {
 			);
 		},
 		(statusUpdate) => {
+			if (run !== probeRun) return;
 			queryClient.setQueryData<ProbeQueryData>(
 				["probes", queryId, token],
 				(old) => {
@@ -122,6 +127,10 @@ const liveVerdict = $derived(
 			)
 		: null,
 );
+const retryProbe = () => {
+	probeRun += 1;
+	void queryClient.invalidateQueries({ queryKey: ["check", target], exact: true });
+};
 </script>
 
 <SearchForm {token} />
@@ -139,6 +148,13 @@ const liveVerdict = $derived(
 		<ErrorMessage status={error.status} reason={error.message} />
 	</div>
 {:else if checkQuery.data}
+	<ResultActions
+		result={checkQuery.data}
+		probes={probeQuery.data?.probes ?? []}
+		probeStatus={probeQuery.data?.status ?? null}
+		probeVerdict={liveVerdict}
+		onRetryProbe={retryProbe}
+	/>
 	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} {token}>
 		{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
 			<ProbeTable

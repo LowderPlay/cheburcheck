@@ -10,7 +10,7 @@ use querying::target::Target;
 use querying::{Check, CheckError, CheckVerdict, Checker};
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
-use rocket::serde::json::Json;
+use rocket::serde::json::{Json, Value, serde_json};
 use rocket::tokio::sync::RwLock;
 use rocket::{Request, State};
 use rocket_client_addr::ClientRealAddr;
@@ -136,6 +136,84 @@ pub async fn check(
             Err(Status::InternalServerError)
         }
     }
+}
+
+pub async fn build_shared_check_result(
+    query: &str,
+    checker: &State<Arc<RwLock<Checker>>>,
+    pool: &PgPool,
+    analytics: &Analytics,
+) -> Result<Value, Status> {
+    let target = Target::from(query.trim());
+    let check = checker.read().await.check(target.clone()).await;
+    let check = match check {
+        Ok(check) => check,
+        Err(CheckError::NotFound) => return Err(Status::NotFound),
+        Err(error) => {
+            warn!("api: failed to rebuild check for sharing: {error:?}");
+            return Err(Status::InternalServerError);
+        }
+    };
+
+    let whitelist = if let Target::Domain(domain) = &target {
+        let mut db = pool.acquire().await.map_err(|_| Status::InternalServerError)?;
+        check_whitelist(domain, &mut db)
+            .await
+            .map_err(|_| Status::InternalServerError)?
+    } else {
+        None
+    };
+    let complaints = match analytics.complaints(&target.to_query()).await {
+        Ok(days) => days,
+        Err(error) => {
+            warn!("api: failed to load complaints for shared check: {error}");
+            Vec::new()
+        }
+    };
+    let response = build_response(None, &target, check, whitelist, complaints);
+    shared_result_value(&response).map_err(|error| {
+        warn!("api: failed to serialize rebuilt check for sharing: {error}");
+        Status::InternalServerError
+    })
+}
+
+fn shared_result_value(response: &ApiCheckResponse) -> Result<Value, serde_json::Error> {
+    let providers = response
+        .cdn_providers
+        .iter()
+        .map(|(name, networks)| serde_json::json!({ "name": name, "networks": networks }))
+        .collect::<Vec<_>>();
+    let whitelist = response
+        .whitelist
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?
+        .map(|entry| {
+            serde_json::json!({ "lastOk": entry.get("last_ok").cloned().unwrap_or(Value::Null) })
+        });
+    let asn_info = response.asn_info.as_ref().map(|info| {
+        serde_json::json!({
+            "prefixes": info.prefixes,
+            "blockedPrefixes": info.blocked_prefixes,
+        })
+    });
+    let result = serde_json::json!({
+        "target": response.target,
+        "targetType": response.target_type,
+        "found": response.blocked,
+        "blocked": response.blocked,
+        "domain": response.rkn_domain,
+        "ips": response.ips,
+        "reverseLookup": response.reverse_lookup,
+        "subnetSize": response.subnet_size,
+        "geo": response.geo,
+        "providers": providers,
+        "blockedSubnets": response.blocked_subnets,
+        "asnInfo": asn_info,
+        "whitelist": whitelist,
+        "complaints": response.complaints,
+    });
+    Ok(result)
 }
 
 fn build_response(

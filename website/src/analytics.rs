@@ -19,6 +19,16 @@ pub const INSERT_QUERY_SQL: &str = include_str!("../clickhouse/queries/insert_qu
 pub const INSERT_PROBE_REPORT_SQL: &str =
     include_str!("../clickhouse/queries/insert_probe_report.sql");
 
+#[derive(klickhouse::Row)]
+struct SharedProbeRow {
+    result: String,
+}
+
+#[derive(klickhouse::Row)]
+struct QueryTargetRow {
+    query: String,
+}
+
 struct ConnectionConfig {
     host: String,
     port: u16,
@@ -397,6 +407,33 @@ impl Analytics {
                 .arg(self.stats_timezone.clone()),
         )
         .await
+    }
+
+    pub async fn shared_probes(
+        &self,
+        id: Uuid,
+    ) -> klickhouse::Result<Vec<rocket::serde::json::Value>> {
+        use rocket::serde::json::serde_json;
+
+        Ok(self.read::<SharedProbeRow>(QueryBuilder::new(
+            "SELECT argMax(result, date) AS result
+             FROM probe_reports
+             WHERE query_id = $1
+             GROUP BY probe_id
+             LIMIT 256",
+        ).arg(id)).await?.into_iter()
+            .filter_map(|row| serde_json::from_str::<serde_json::Value>(&row.result).ok())
+            .collect())
+    }
+
+    pub async fn query_target(&self, id: Uuid) -> klickhouse::Result<Option<String>> {
+        Ok(self
+            .read::<QueryTargetRow>(
+                QueryBuilder::new("SELECT query FROM queries WHERE id = $1 LIMIT 1").arg(id),
+            )
+            .await?
+            .pop()
+            .map(|row| row.query))
     }
 
     pub async fn feedback(
