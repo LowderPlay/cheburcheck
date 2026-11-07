@@ -1,4 +1,6 @@
 use super::rate_limit::ApiRateLimiter;
+use crate::analytics::Analytics;
+use crate::check_context::CheckContext;
 use log::warn;
 use rocket::State;
 use rocket::http::Status;
@@ -7,7 +9,10 @@ use rocket::serde::{Serialize, json};
 use rocket::response::status::Created;
 use rocket_client_addr::ClientRealAddr;
 use sqlx::PgPool;
+use querying::Checker;
+use rocket::tokio::sync::RwLock;
 use std::time::Duration;
+use std::sync::Arc;
 use uuid::Uuid;
 
 const SHARE_LIFETIME_DAYS: i32 = 30;
@@ -31,10 +36,19 @@ pub struct SharedResult {
     snapshot: Value,
 }
 
-#[post("/shares", format = "json", data = "<snapshot>")]
+#[derive(rocket::serde::Deserialize)]
+#[serde(crate = "rocket::serde", deny_unknown_fields)]
+pub struct CreateShareRequest {
+    id: String,
+}
+
+#[post("/shares", format = "json", data = "<request>")]
 pub async fn create_share(
-    snapshot: Json<Value>,
+    request: Json<CreateShareRequest>,
     pool: &State<PgPool>,
+    analytics: &State<Analytics>,
+    contexts: &State<CheckContext>,
+    checker: &State<Arc<RwLock<Checker>>>,
     limiter: &State<std::sync::Arc<ApiRateLimiter>>,
     addr: &ClientRealAddr,
 ) -> Result<Created<json::Json<CreatedShare>>, Status> {
@@ -42,10 +56,38 @@ pub async fn create_share(
         return Err(Status::TooManyRequests);
     }
 
-    let snapshot = snapshot.into_inner();
-    if !valid_snapshot(&snapshot) {
-        return Err(Status::BadRequest);
-    }
+    let context = contexts.verify(&request.id)?;
+    let target = analytics
+        .query_target(context.query_id)
+        .await
+        .map_err(|error| {
+            warn!("api: failed to load query {} for sharing: {error}", context.query_id);
+            Status::InternalServerError
+        })?
+        .filter(|target| target == &context.target)
+        .ok_or(Status::NotFound)?;
+    let result = super::build_shared_check_result(
+        &target,
+        checker,
+        pool.inner(),
+        analytics,
+    )
+    .await?;
+    let probes = analytics.shared_probes(context.query_id).await.map_err(|error| {
+        warn!("api: failed to load probes for shared check {}: {error}", context.query_id);
+        Status::InternalServerError
+    })?;
+    let probe_status = serde_json::json!({
+        "online_probes": probes.len(),
+        "response_count": probes.len(),
+        "status": "done"
+    });
+    let snapshot = serde_json::json!({
+        "version": 1,
+        "result": result,
+        "probes": probes,
+        "probe_status": probe_status,
+    });
 
     let snapshot_json = serde_json::to_string(&snapshot).map_err(|error| {
         warn!("api: failed to serialize shared result: {error}");
@@ -56,21 +98,20 @@ pub async fn create_share(
     }
 
     let id = Uuid::new_v4();
-    sqlx::query("DELETE FROM shared_results WHERE expires_at <= NOW()")
-        .execute(pool.inner())
-        .await
-        .map_err(|error| {
-            warn!("api: failed to remove expired shared results: {error}");
-            Status::InternalServerError
-        })?;
-    let row = sqlx::query_as::<_, (String, String)>(
-        "INSERT INTO shared_results (id, snapshot, expires_at)
-         VALUES ($1, $2::jsonb, NOW() + make_interval(days => $3::int))
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        "INSERT INTO shared_results (id, query_id, snapshot, expires_at)
+         VALUES ($1, $2, $3::jsonb, NOW() + make_interval(days => $4::int))
+         ON CONFLICT (query_id) DO UPDATE
+         SET snapshot = EXCLUDED.snapshot,
+             created_at = NOW(),
+             expires_at = EXCLUDED.expires_at
          RETURNING
+             id::text,
              to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'),
              to_char(expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')",
     )
     .bind(id)
+    .bind(context.query_id)
     .bind(snapshot_json)
     .bind(SHARE_LIFETIME_DAYS)
     .fetch_one(pool.inner())
@@ -80,40 +121,13 @@ pub async fn create_share(
         Status::InternalServerError
     })?;
 
-    Ok(Created::new(format!("/api/v1/shares/{id}")).body(json::Json(
+    Ok(Created::new(format!("/api/v1/shares/{}", row.0)).body(json::Json(
         CreatedShare {
-            id: id.to_string(),
-            created_at: row.0,
-            expires_at: row.1,
+            id: row.0,
+            created_at: row.1,
+            expires_at: row.2,
         },
     )))
-}
-
-fn valid_snapshot(snapshot: &Value) -> bool {
-    let Some(result) = snapshot.get("result") else {
-        return false;
-    };
-    snapshot.get("version").and_then(Value::as_u64) == Some(1)
-        && result
-            .get("target")
-            .and_then(Value::as_str)
-            .is_some_and(|target| !target.trim().is_empty() && target.len() <= 255)
-        && result.get("targetType").and_then(Value::as_str).is_some()
-        && result.get("found").and_then(Value::as_bool).is_some()
-        && result.get("blocked").and_then(Value::as_bool).is_some()
-        && result.get("ips").and_then(Value::as_array).is_some()
-        && result.get("reverseLookup").and_then(Value::as_array).is_some()
-        && result.get("providers").and_then(Value::as_array).is_some()
-        && result.get("blockedSubnets").and_then(Value::as_array).is_some()
-        && result.get("geo").and_then(Value::as_object).is_some()
-        && result
-            .get("complaints")
-            .and_then(Value::as_array)
-            .is_some()
-        && snapshot.get("probes").and_then(Value::as_array).is_some()
-        && snapshot
-            .get("probe_status")
-            .is_some_and(|status| status.is_null() || status.is_object())
 }
 
 #[get("/shares/<id>")]

@@ -7,7 +7,7 @@ import type {
 	ProbeStatus,
 	ResolvedProbeVerdict,
 } from "$lib/api/probe";
-import { createSharedResult, type SharedSnapshot } from "$lib/api/share";
+import { createSharedResult } from "$lib/api/share";
 
 let {
 	result,
@@ -29,7 +29,6 @@ let copyError = $state(false);
 let shareError = $state("");
 let sharePending = $state(false);
 let shareUrl = $state("");
-let sharedSnapshotSignature = "";
 let resetCopyTimer: ReturnType<typeof setTimeout> | undefined;
 
 const verdictNames: Record<string, string> = {
@@ -96,23 +95,6 @@ const reportData = $derived.by(() => ({
 		})),
 	},
 }));
-
-const shareSnapshot = $derived.by((): SharedSnapshot => {
-	const sharedResult = { ...result };
-	delete sharedResult.id;
-	return {
-		version: 1,
-		result: sharedResult,
-		probes,
-		probe_status: probeStatus
-			? {
-					online_probes: probeStatus.online_probes,
-					response_count: probeStatus.response_count,
-					status: probeStatus.status,
-				}
-			: null,
-	};
-});
 
 const report = $derived.by(() => {
 	const { target, verdict: reportVerdict, registry, dynamic_check } = reportData;
@@ -185,16 +167,12 @@ async function shareResult() {
 	if (sharePending) return;
 
 	try {
-		const signature = JSON.stringify(shareSnapshot);
-		if (!shareUrl || signature !== sharedSnapshotSignature) {
-			shareUrl = "";
-			sharedSnapshotSignature = "";
-			shareCopied = false;
-			sharePending = true;
-			const shared = await createSharedResult(shareSnapshot);
-			shareUrl = new URL(`/share/${shared.id}`, page.url.origin).href;
-			sharedSnapshotSignature = signature;
-		}
+		if (!result.id) throw new Error("Для этого результата нельзя создать ссылку");
+		shareUrl = "";
+		shareCopied = false;
+		sharePending = true;
+		const shared = await createSharedResult(result.id);
+		shareUrl = new URL(`/share/${shared.id}`, page.url.origin).href;
 		await copyText(shareUrl);
 		shareCopied = true;
 		if (resetCopyTimer) clearTimeout(resetCopyTimer);

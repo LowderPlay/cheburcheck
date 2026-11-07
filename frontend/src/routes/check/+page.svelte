@@ -129,6 +129,7 @@ const liveVerdict = $derived(
 );
 const retryProbe = () => {
 	probeRun += 1;
+	void queryClient.invalidateQueries({ queryKey: ["check", target], exact: true });
 };
 </script>
 

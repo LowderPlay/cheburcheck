@@ -38,7 +38,7 @@ const probeStatus = $derived<ProbeStatus | null>(
 				id: shared?.id ?? "",
 				target: result?.target ?? "",
 				...snapshot.probe_status,
-					status: snapshot.probe_status.status === "error" ? "error" : "done",
+				status: snapshot.probe_status.status,
 			}
 		: null,
 );
@@ -86,9 +86,9 @@ const createdAt = $derived(
 {:else if shared && result}
 	<div class="mb-6 border border-neutral-800 bg-neutral-900/20 p-4 text-sm text-neutral-400">
 		<p>
-			Сохранённый результат проверки от
+			Результат проверки сформирован сервером при создании ссылки
 			<time datetime={shared.created_at}>{createdAt}</time>.
-			Это снимок на момент создания ссылки; новая проверка не запускалась.
+			Статические данные проверены заново; блок динамической проверки содержит ответы сохранённого запуска.
 		</p>
 		<p class="mt-1 text-xs text-neutral-500">
 			Ссылка действует до

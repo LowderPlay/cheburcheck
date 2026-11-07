@@ -10,7 +10,7 @@ mod share;
 mod rate_limit;
 mod status;
 
-pub use check_endpoint::check;
+pub use check_endpoint::{build_shared_check_result, check};
 pub use feedback_endpoint::feedback;
 pub use nodes_endpoint::node_stats;
 pub use probe::{ProbeResponseCache, probe_query};

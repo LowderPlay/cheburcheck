@@ -1,5 +1,5 @@
-import type { CheckResult } from "./check";
 import type { ProbeResult, ProbeStatus } from "./probe";
+import type { CheckResult } from "./check";
 
 export type SharedSnapshot = {
 	version: 1;
@@ -16,7 +16,7 @@ export type SharedResult = {
 };
 
 export async function createSharedResult(
-	snapshot: SharedSnapshot,
+	id: string,
 ): Promise<Pick<SharedResult, "id" | "created_at" | "expires_at">> {
 	const response = await fetch("/api/v1/shares", {
 		method: "POST",
@@ -24,7 +24,7 @@ export async function createSharedResult(
 			Accept: "application/json",
 			"Content-Type": "application/json",
 		},
-		body: JSON.stringify(snapshot),
+		body: JSON.stringify({ id }),
 	});
 
 	if (!response.ok) {
