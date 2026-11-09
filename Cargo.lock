@@ -4717,7 +4717,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.5.7"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "deadpool",
