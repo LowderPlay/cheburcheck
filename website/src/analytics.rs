@@ -478,6 +478,7 @@ mod tests {
         verdicts: Vec<Option<String>>,
         duration_ms: Option<i64>,
         cached: bool,
+        api_token_id: Option<Uuid>,
     }
 
     async fn test_analytics(settings: PoolSettings) -> Result<Analytics> {
@@ -776,7 +777,7 @@ mod tests {
             let applied = client
                 .query_one::<Count>("SELECT count() AS count FROM refinery_schema_history")
                 .await?;
-            assert_eq!(applied.count, 2);
+            assert_eq!(applied.count, 4);
             let missing = Uuid::new_v4();
             assert!(analytics.query_by_id(missing).await?.is_none());
             let id = Uuid::new_v4();
@@ -857,7 +858,8 @@ mod tests {
                         .arg(None::<i16>)
                         .arg(None::<String>)
                         .arg(1234_i64)
-                        .arg(true),
+                        .arg(true)
+                        .arg(Some(id)),
                 )
                 .await?;
             // Probe inserts acknowledge buffering, so flush explicitly before
@@ -865,7 +867,7 @@ mod tests {
             client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let probe = client
                 .query_one::<StoredProbe>(
-                    "SELECT query_id, result, verdicts, duration_ms, cached FROM probe_reports",
+                    "SELECT query_id, result, verdicts, duration_ms, cached, api_token_id FROM probe_reports",
                 )
                 .await?;
             assert_eq!(probe.query_id, id);
@@ -873,6 +875,27 @@ mod tests {
             assert_eq!(probe.verdicts, vec![Some("blocked".into())]);
             assert_eq!(probe.duration_ms, Some(1234));
             assert!(probe.cached);
+            assert_eq!(probe.api_token_id, Some(id));
+            analytics
+                .execute(
+                    QueryBuilder::new(INSERT_PROBE_REPORT_SQL)
+                        .arg(id)
+                        .arg(target)
+                        .arg(2_i32)
+                        .arg(Vec::<String>::new())
+                        .arg(json)
+                        .arg(None::<i16>)
+                        .arg(None::<String>)
+                        .arg(1234_i64)
+                        .arg(false)
+                        .arg(None::<Uuid>),
+                )
+                .await?;
+            client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
+            let anonymous = client.query_one::<StoredProbe>(
+                "SELECT query_id, result, verdicts, duration_ms, cached, api_token_id FROM probe_reports WHERE probe_id = 2",
+            ).await?;
+            assert_eq!(anonymous.api_token_id, None);
             let available_before = analytics.pool.inner.status().available;
             assert!(
                 analytics

@@ -13,6 +13,10 @@ import KbHeading from "$lib/components/kb/KbHeading.svelte";
 
 <KbArticle>
 	<h1>Ответы на частые вопросы</h1>
+	<p>
+		Для интеграций доступна <a href="/kb/api">документация API</a>: проверка
+		ресурсов, сетевые сканеры и авторизация.
+	</p>
 	<!-- biome-ignore format: link punctuation -->
 	<p>
 		На этой странице собраны ответы на часто задаваемые вопросы. Если вас

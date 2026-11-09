@@ -4740,6 +4740,7 @@ dependencies = [
  "rumqttc 0.24.0",
  "semver",
  "serde",
+ "sha2",
  "sqlx",
  "toml",
  "url",

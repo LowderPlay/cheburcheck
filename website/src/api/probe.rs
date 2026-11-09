@@ -1,3 +1,4 @@
+use super::probe_auth::{ProbeAuth, ProbeCredentials};
 use super::rate_limit::ProbeRateLimiter;
 use crate::analytics::Analytics;
 use crate::check_context::CheckContext;
@@ -24,6 +25,56 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const DEFAULT_PROBE_RESPONSE_CACHE_SECONDS: u64 = 3 * 60 * 60;
+
+#[derive(Debug, Responder)]
+pub struct ProbeError(rocket::response::status::Custom<rocket::serde::json::Json<Value>>);
+
+impl From<Status> for ProbeError {
+    fn from(status: Status) -> Self {
+        Self(rocket::response::status::Custom(
+            status,
+            rocket::serde::json::Json(json!({
+                "code": status.code,
+                "info": status.reason_lossy(),
+            })),
+        ))
+    }
+}
+
+fn require_probe_credentials(
+    credentials: &ProbeCredentials<'_>,
+    turnstile_token: Option<&str>,
+) -> Result<(), ProbeError> {
+    if credentials.0.is_none() && turnstile_token.is_none_or(str::is_empty) {
+        return Err(ProbeError(rocket::response::status::Custom(
+            Status::Forbidden,
+            rocket::serde::json::Json(json!({
+                "code": 403,
+                "info": "Для запуска сканеров необходим API-токен. Документация: https://cheburcheck.ru/kb/api#authorization",
+                "documentation_url": "https://cheburcheck.ru/kb/api#authorization",
+            })),
+        )));
+    }
+    Ok(())
+}
+
+async fn authorize_probe_targets(
+    pool: &PgPool,
+    auth: &ProbeAuth,
+    credentials: ProbeCredentials<'_>,
+    turnstile_token: Option<&str>,
+    scanner_token: Option<&str>,
+) -> Result<(Option<String>, Vec<String>, Option<Uuid>), ProbeError> {
+    // A scanner token grants access only to that scanner, never to the public set.
+    let api_token_id = if scanner_token.is_none() {
+        require_probe_credentials(&credentials, turnstile_token)?;
+        auth.authorize(pool, credentials, turnstile_token).await?
+    } else {
+        None
+    };
+    let (target_probe, eligible_probes) = load_probe_targets(pool, scanner_token).await?;
+    Ok((target_probe, eligible_probes, api_token_id))
+}
 
 #[derive(Clone)]
 struct CachedProbeResponse {
@@ -130,10 +181,13 @@ pub struct ProbeReporterInfo {
     pub cdn_unblocked: bool,
 }
 
-#[get("/probe/<id>?<token>")]
+#[get("/probe/<id>?<token>&<turnstile_token>")]
 pub async fn probe_query(
     id: &str,
     token: Option<&str>,
+    turnstile_token: Option<&str>,
+    credentials: ProbeCredentials<'_>,
+    auth: &State<ProbeAuth>,
     contexts: &State<CheckContext>,
     addr: &ClientRealAddr,
     pool: &State<PgPool>,
@@ -141,9 +195,9 @@ pub async fn probe_query(
     mqtt: &State<MqttPublisher>,
     limiter: &State<Arc<ProbeRateLimiter>>,
     cache: &State<Arc<ProbeResponseCache>>,
-) -> Result<EventStream![Event], Status> {
+) -> Result<EventStream![Event], ProbeError> {
     if !limiter.check(&addr.ip) {
-        return Err(Status::TooManyRequests);
+        return Err(Status::TooManyRequests.into());
     }
 
     let context = contexts.verify(id)?;
@@ -154,20 +208,21 @@ pub async fn probe_query(
         Target::Domain(domain) => Some(domain.as_str()),
         Target::Ipv4(_) | Target::Ipv6(_) => None,
         Target::Ipv4Subnet(_) | Target::Ipv6Subnet(_) | Target::Asn(_) => {
-            return Err(Status::BadRequest);
+            return Err(Status::BadRequest.into());
         }
     };
     let is_ip_target = domain.is_none();
     let probe_config = mqtt.probe_config().await;
     if domain.is_none() && !probe_config.traceroute_enabled {
-        return Err(Status::BadRequest);
+        return Err(Status::BadRequest.into());
     }
     let ip = context.ip.ok_or(Status::BadRequest)?;
     if Target::is_bogon(ip) {
-        return Err(Status::Forbidden);
+        return Err(Status::Forbidden.into());
     }
 
-    let (target_probe, eligible_probes) = load_probe_targets(pool, token).await?;
+    let (target_probe, eligible_probes, api_token_id) =
+        authorize_probe_targets(pool, auth, credentials, turnstile_token, token).await?;
     let active_probes = if target_probe.is_some() {
         eligible_probes
     } else {
@@ -223,6 +278,7 @@ pub async fn probe_query(
                 &response,
                 entry.target_traceroute.as_ref(),
                 entry.duration_ms,
+                api_token_id,
                 &analytics,
             ).await {
                 warn!("api: failed to save cached probe report for query {id}: {error}");
@@ -278,6 +334,7 @@ pub async fn probe_query(
                                     &response,
                                     target_traceroute.as_ref(),
                                     duration_ms,
+                                    api_token_id,
                                     &analytics,
                                 ).await {
                                     warn!("api: failed to save probe report for query {id}: {error}");
@@ -424,6 +481,7 @@ async fn insert_probe_report(
     response: &Value,
     target_traceroute: Option<&TcpTracerouteResult>,
     duration_ms: u64,
+    api_token_id: Option<Uuid>,
     analytics: &Analytics,
 ) -> Result<(), klickhouse::KlickhouseError> {
     let probe_id = response
@@ -465,7 +523,8 @@ async fn insert_probe_report(
                         .get("cached")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
-                ),
+                )
+                .arg(api_token_id),
         )
         .await?;
 
@@ -681,6 +740,141 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rocket::async_test]
+    async fn scanner_token_does_not_fall_back_to_public_authorization() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let auth = ProbeAuth::from_env();
+        let missing = authorize_probe_targets(&pool, &auth, ProbeCredentials(None), None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(missing.0.0, Status::Forbidden);
+        let empty = authorize_probe_targets(&pool, &auth, ProbeCredentials(None), None, Some(""))
+            .await
+            .unwrap_err();
+        assert_eq!(empty.0.0, Status::BadRequest);
+    }
+
+    #[rocket::async_test]
+    #[ignore = "requires disposable PostgreSQL in PROBE_AUTH_TEST_DATABASE_URL"]
+    async fn scanner_token_authorizes_only_its_scanner_including_cached_results() {
+        let url = std::env::var("PROBE_AUTH_TEST_DATABASE_URL").unwrap();
+        let admin = PgPool::connect(&url).await.unwrap();
+        let schema = format!("scanner_token_test_{}", Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let schema_for_pool = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .after_connect(move |conn, _| {
+                let sql = format!("SET search_path TO {schema_for_pool}");
+                Box::pin(async move {
+                    sqlx::query(&sql).execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE reporters (id INTEGER PRIMARY KEY, token TEXT NOT NULL, hidden BOOLEAN NOT NULL);
+            INSERT INTO reporters VALUES (1, 'scanner-one', true), (2, 'scanner-two', false);")
+            .execute(&pool).await.unwrap();
+        // There is deliberately no API-key table: scanner requests must bypass it.
+        let auth = ProbeAuth::from_env();
+        let cache = ProbeResponseCache::new(Duration::from_secs(60));
+        for id in ["1", "2"] {
+            cache
+                .insert("example.com", id, json!({"probe_id": id}), None, 1, 0)
+                .await;
+        }
+        for (token, id) in [("scanner-one", "1"), ("scanner-two", "2")] {
+            for credentials in [None, Some("invalid-api-key")] {
+                let (selected, eligible, api_token_id) = authorize_probe_targets(
+                    &pool,
+                    &auth,
+                    ProbeCredentials(credentials),
+                    None,
+                    Some(token),
+                )
+                .await
+                .unwrap();
+                assert_eq!(selected.as_deref(), Some(id));
+                assert_eq!(api_token_id, None);
+                assert_eq!(eligible, vec![id.to_owned()]);
+                let (cached, missing, _) = cache.partition("example.com", &eligible).await;
+                assert!(missing.is_empty());
+                assert_eq!(cached.len(), 1);
+                assert_eq!(cached[0].0, id);
+                assert_eq!(cached[0].1.response["probe_id"], id);
+                let (cached, missing, _) = cache.partition("uncached.example.com", &eligible).await;
+                assert!(cached.is_empty());
+                assert_eq!(missing, vec![id.to_owned()]);
+            }
+        }
+        let invalid =
+            authorize_probe_targets(&pool, &auth, ProbeCredentials(None), None, Some("unknown"))
+                .await
+                .unwrap_err();
+        assert_eq!(invalid.0.0, Status::NotFound);
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+
+    #[get("/credentials?<turnstile_token>")]
+    fn credentials_error(
+        credentials: ProbeCredentials<'_>,
+        turnstile_token: Option<&str>,
+    ) -> Result<(), ProbeError> {
+        require_probe_credentials(&credentials, turnstile_token)
+    }
+
+    #[rocket::async_test]
+    async fn missing_credentials_response_links_to_api_documentation() {
+        let client = rocket::local::asynchronous::Client::tracked(
+            rocket::build().mount("/", routes![credentials_error]),
+        )
+        .await
+        .unwrap();
+        for path in ["/credentials", "/credentials?turnstile_token="] {
+            let response = client.get(path).dispatch().await;
+            assert_eq!(response.status(), Status::Forbidden);
+            let body = response.into_json::<Value>().await.unwrap();
+            assert_eq!(body["code"], 403);
+            assert_eq!(
+                body["documentation_url"],
+                "https://cheburcheck.ru/kb/api#authorization"
+            );
+            assert!(
+                body["info"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Authorization: Bearer")
+            );
+        }
+        assert_eq!(
+            client
+                .get("/credentials?turnstile_token=token")
+                .dispatch()
+                .await
+                .status(),
+            Status::Ok
+        );
+        assert_eq!(
+            client
+                .get("/credentials")
+                .header(rocket::http::Header::new("Authorization", "Bearer api-key"))
+                .dispatch()
+                .await
+                .status(),
+            Status::Ok
+        );
+    }
 
     #[test]
     fn replay_marks_response_cached_without_changing_the_original_measurement() {

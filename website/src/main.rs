@@ -138,6 +138,7 @@ async fn rocket() -> _ {
         .manage(probe_update_download_limiter)
         .manage(mqtt_publisher)
         .manage(probe_response_cache)
+        .manage(api::ProbeAuth::from_env())
         .manage(probe_update_proxy)
         .attach(AdHoc::try_on_ignite("Database Migrations", run_migrations))
         .mount(
@@ -158,6 +159,9 @@ async fn rocket() -> _ {
             routes![
                 admin::list,
                 admin::create,
+                admin::issue_probe_api_key,
+                admin::list_probe_api_keys,
+                admin::revoke_probe_api_key,
                 admin::update,
                 admin::remove,
                 admin::reload,

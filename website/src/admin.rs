@@ -2,11 +2,13 @@ use crate::api::ProbeResponseCache;
 use crate::mqtt::{MqttPublisher, ProbeStatusSnapshot};
 use rand::distr::{Alphanumeric, SampleString};
 use reports::probe::{ProbeCommand, ProbeCommandResult};
+use rocket::http::Header;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
 use rocket::serde::json::Json;
 use rocket::{Request, State};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use sqlx::types::chrono::{DateTime, Utc};
 use std::net::IpAddr;
@@ -43,6 +45,138 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         difference |= (left ^ right) as usize;
     }
     difference == 0
+}
+
+#[derive(Deserialize)]
+pub struct ProbeApiKeyInput {
+    pub name: String,
+    pub expires_in_days: Option<u32>,
+}
+
+impl ProbeApiKeyInput {
+    fn validate(&self) -> Result<(), Status> {
+        if self.name.trim().is_empty()
+            || self.name.len() > 255
+            || self
+                .expires_in_days
+                .is_some_and(|days| !(1..=3650).contains(&days))
+        {
+            return Err(Status::BadRequest);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+pub struct CreatedProbeApiKey {
+    pub id: sqlx::types::Uuid,
+    pub name: String,
+    pub token: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Responder)]
+#[response(status = 201)]
+pub struct IssuedProbeApiKey(pub Json<CreatedProbeApiKey>, Header<'static>);
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ProbeApiKeyRow {
+    pub id: sqlx::types::Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Responder)]
+pub struct ProbeApiKeyList(pub Json<Vec<ProbeApiKeyRow>>, Header<'static>);
+
+#[get("/probe-api-keys")]
+pub async fn list_probe_api_keys(
+    _admin: Admin,
+    pool: &State<PgPool>,
+) -> Result<ProbeApiKeyList, Status> {
+    let rows = sqlx::query_as::<_, ProbeApiKeyRow>(
+        "SELECT id, name, created_at, expires_at, revoked_at
+         FROM probe_api_keys ORDER BY created_at DESC, id DESC",
+    )
+    .fetch_all(&**pool)
+    .await
+    .map_err(|error| {
+        log::error!("failed to list probe API keys: {error}");
+        Status::InternalServerError
+    })?;
+    Ok(ProbeApiKeyList(
+        Json(rows),
+        Header::new("Cache-Control", "no-store"),
+    ))
+}
+
+#[derive(Responder)]
+pub struct RevokedProbeApiKey(pub Json<ProbeApiKeyRow>, Header<'static>);
+
+#[post("/probe-api-keys/<id>/revoke")]
+pub async fn revoke_probe_api_key(
+    _admin: Admin,
+    id: &str,
+    pool: &State<PgPool>,
+) -> Result<RevokedProbeApiKey, Status> {
+    let id = sqlx::types::Uuid::parse_str(id).map_err(|_| Status::BadRequest)?;
+    let row = sqlx::query_as::<_, ProbeApiKeyRow>(
+        "UPDATE probe_api_keys SET revoked_at = COALESCE(revoked_at, now())
+         WHERE id = $1 RETURNING id, name, created_at, expires_at, revoked_at",
+    )
+    .bind(id)
+    .fetch_optional(&**pool)
+    .await
+    .map_err(|error| {
+        log::error!("failed to revoke probe API key {id}: {error}");
+        Status::InternalServerError
+    })?
+    .ok_or(Status::NotFound)?;
+    Ok(RevokedProbeApiKey(
+        Json(row),
+        Header::new("Cache-Control", "no-store"),
+    ))
+}
+
+#[post("/probe-api-keys", format = "json", data = "<input>")]
+pub async fn issue_probe_api_key(
+    _admin: Admin,
+    input: Json<ProbeApiKeyInput>,
+    pool: &State<PgPool>,
+) -> Result<IssuedProbeApiKey, Status> {
+    input.validate()?;
+    let token = format!(
+        "cheburcheck_{}",
+        Alphanumeric.sample_string(&mut rand::rng(), 48)
+    );
+    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    let expires_at = input
+        .expires_in_days
+        .map(|days| Utc::now() + std::time::Duration::from_secs(u64::from(days) * 86400));
+    let name = input.name.trim().to_owned();
+    let id = sqlx::query_scalar(
+        "INSERT INTO probe_api_keys (name, key_hash, expires_at) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(&name)
+    .bind(hash)
+    .bind(expires_at)
+    .fetch_one(&**pool)
+    .await
+    .map_err(|error| {
+        log::error!("failed to issue probe API key: {error}");
+        Status::InternalServerError
+    })?;
+    Ok(IssuedProbeApiKey(
+        Json(CreatedProbeApiKey {
+            id,
+            name,
+            token,
+            expires_at,
+        }),
+        Header::new("Cache-Control", "no-store"),
+    ))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -367,6 +501,78 @@ pub async fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rocket::async_test]
+    async fn api_key_management_requires_admin_authentication() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let client =
+            rocket::local::asynchronous::Client::tracked(rocket::build().manage(pool).mount(
+                "/",
+                routes![
+                    issue_probe_api_key,
+                    list_probe_api_keys,
+                    revoke_probe_api_key
+                ],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .post("/probe-api-keys")
+                .header(rocket::http::ContentType::JSON)
+                .body(r#"{"name":"test","expires_in_days":90}"#)
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
+        assert_eq!(
+            client.get("/probe-api-keys").dispatch().await.status(),
+            Status::Unauthorized
+        );
+        assert_eq!(
+            client
+                .post(format!(
+                    "/probe-api-keys/{}/revoke",
+                    sqlx::types::Uuid::new_v4()
+                ))
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
+    }
+
+    #[test]
+    fn validates_api_key_fields() {
+        for days in [None, Some(1), Some(3650)] {
+            assert!(
+                ProbeApiKeyInput {
+                    name: "test".into(),
+                    expires_in_days: days
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+        for (name, days) in [
+            (" ".into(), None),
+            ("x".repeat(256), None),
+            ("test".into(), Some(0)),
+            ("test".into(), Some(3651)),
+        ] {
+            assert_eq!(
+                ProbeApiKeyInput {
+                    name,
+                    expires_in_days: days
+                }
+                .validate(),
+                Err(Status::BadRequest)
+            );
+        }
+    }
 
     #[test]
     fn validates_probe_fields() {
