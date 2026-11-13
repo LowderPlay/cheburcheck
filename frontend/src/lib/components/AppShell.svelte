@@ -69,6 +69,7 @@ $effect(() => {
 			<span class="text-2xl font-bold uppercase">Cheburcheck</span>
 		</a>
 		<div class="flex gap-4 text-xs text-neutral-500 items-center">
+			<a href="/kb/api" class="text-neutral-500 underline">API</a>
 			<a href="/kb/faq" class="text-neutral-500 underline">FAQ</a>
 			<a
 				class="flex items-center gap-2 text-neutral-500 no-underline"

@@ -134,6 +134,14 @@ import KbHeading from "$lib/components/kb/KbHeading.svelte";
 		</li>
 	</ul>
 
+	<KbHeading id="есть-ли-api" title="Есть ли у сайта API?">
+		Есть ли у сайта API?
+	</KbHeading>
+	<p>
+		Да, API позволяет проверять ресурсы и запускать сетевые сканеры.
+		Описание методов и авторизации — в <a href="/kb/api">документации API</a>.
+	</p>
+
 	<KbHeading
 		id="как-я-могу-помочь-в-развитии-сайта"
 		title="Как я могу помочь в развитии сайта?"

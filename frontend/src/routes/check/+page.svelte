@@ -12,6 +12,7 @@ import {
 import EmptyResult from "$lib/components/EmptyResult.svelte";
 import ErrorMessage from "$lib/components/ErrorMessage.svelte";
 import FeedbackPopover from "$lib/components/FeedbackPopover.svelte";
+import ProbeTurnstile from "$lib/components/ProbeTurnstile.svelte";
 import ResultPanel from "$lib/components/ResultPanel.svelte";
 import ProbeTable from "$lib/components/result/ProbeTable.svelte";
 import SearchForm from "$lib/components/SearchForm.svelte";
@@ -35,6 +36,11 @@ const checkQuery = createQuery(() => ({
 
 const queryId = $derived(checkQuery.data?.id);
 const shouldProbe = $derived(!!queryId);
+let proof = $state<{ id: string; token: string; value: string } | null>(null);
+const consumedTokens = new Set<string>();
+const turnstileToken = $derived(
+	proof?.id === queryId && proof?.token === token ? proof.value : "",
+);
 
 function createInitialProbeData(id: string): ProbeQueryData {
 	return {
@@ -42,7 +48,7 @@ function createInitialProbeData(id: string): ProbeQueryData {
 		status: {
 			id,
 			target,
-			status: "started",
+			status: token ? "started" : "verifying",
 			online_probes: 0,
 			response_count: 0,
 		},
@@ -59,6 +65,11 @@ const probeQuery = createQuery(() => ({
 
 $effect(() => {
 	if (!queryId || !shouldProbe) return;
+	const verificationToken = token ? "" : turnstileToken;
+	if (!token) {
+		if (!verificationToken || consumedTokens.has(verificationToken)) return;
+		consumedTokens.add(verificationToken);
+	}
 
 	queryClient.setQueryData<ProbeQueryData>(
 		["probes", queryId, token],
@@ -106,6 +117,7 @@ $effect(() => {
 				},
 			);
 		},
+		verificationToken,
 	);
 
 	return cleanup;
@@ -115,7 +127,9 @@ const error = $derived(
 	(checkQuery.error instanceof CheckRequestError && checkQuery.error) || null,
 );
 const liveVerdict = $derived(
-	checkQuery.data && probeQuery.data
+	checkQuery.data &&
+		probeQuery.data &&
+		probeQuery.data.status.status !== "error"
 		? selectProbeVerdict(
 				probeQuery.data.probes,
 				checkQuery.data.providers.length > 0,
@@ -140,12 +154,23 @@ const liveVerdict = $derived(
 	</div>
 {:else if checkQuery.data}
 	<ResultPanel result={checkQuery.data} probeVerdict={liveVerdict} {token}>
-		{#if shouldProbe && probeQuery.data && probeQuery.data.status.online_probes > 0}
+		{#if shouldProbe && probeQuery.data && probeQuery.data.status.status !== "error"}
 			<ProbeTable
 				probes={probeQuery.data.probes}
 				status={probeQuery.data.status}
 				isStaticCdn={checkQuery.data.providers.length > 0}
-			/>
+			>
+				{#snippet verification()}
+					{#if !token && queryId}
+						{#key queryId}
+							<ProbeTurnstile
+								onToken={(value) => { proof = { id: queryId, token, value }; }}
+								verified={probeQuery.data?.status.status !== "verifying" && probeQuery.data?.status.status !== "error"}
+							/>
+						{/key}
+					{/if}
+				{/snippet}
+			</ProbeTable>
 		{/if}
 	</ResultPanel>
 	{#if checkQuery.data.id}

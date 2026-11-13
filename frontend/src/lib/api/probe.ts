@@ -130,7 +130,7 @@ export type ProbeStatus = {
 	target: string;
 	online_probes: number;
 	response_count: number;
-	status: "started" | "progress" | "done" | "error";
+	status: "verifying" | "started" | "progress" | "done" | "error";
 };
 
 export function startProbeSSE(
@@ -138,8 +138,10 @@ export function startProbeSSE(
 	token: string,
 	onResult: (result: ProbeResult) => void,
 	onStatus: (status: Partial<ProbeStatus>) => void,
+	turnstileToken: string,
 ) {
 	const params = new URLSearchParams();
+	if (turnstileToken) params.set("turnstile_token", turnstileToken);
 	if (token) params.set("token", token);
 	const query = params.size > 0 ? `?${params.toString()}` : "";
 	const eventSource = new EventSource(

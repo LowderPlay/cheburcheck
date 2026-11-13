@@ -1,5 +1,6 @@
 <script lang="ts">
 import { Activity, LoaderCircle } from "@lucide/svelte";
+import type { Snippet } from "svelte";
 import type {
 	DisplayProbeVerdict,
 	ProbeResult,
@@ -17,10 +18,12 @@ let {
 	probes,
 	status,
 	isStaticCdn,
+	verification,
 }: {
 	probes: ProbeResult[];
 	status: ProbeStatus;
 	isStaticCdn: boolean;
+	verification?: Snippet;
 } = $props();
 
 let selectedRegionId = $state<string | null>(null);
@@ -37,7 +40,7 @@ const selectedRegionProbes = $derived(
 		class="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-2"
 	>
 		<h3 class="flex items-center gap-2 text-sm font-bold uppercase text-white">
-			{#if status.online_probes > 0 && probes.length < status.online_probes && status.status !== "done" && status.status !== "error"}
+			{#if status.status === "verifying" || (status.online_probes > 0 && probes.length < status.online_probes && status.status !== "done" && status.status !== "error")}
 				<LoaderCircle class="animate-spin text-primary" size={16} />
 			{:else}
 				<Activity size={16} class="text-primary" />
@@ -48,19 +51,22 @@ const selectedRegionProbes = $derived(
 				>Результаты динамической проверки</a
 			>
 		</h3>
-		<div class="text-xs text-neutral-400 flex items-center gap-2">
-			<span
-				class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
-			></span>
-			{status.online_probes} {scannerWord(status.online_probes)} в сети,
-			получено {probes.length} из {status.online_probes} ответов
-		</div>
+		{#if status.online_probes > 0 || status.status === "done"}
+			<div class="text-xs text-neutral-400 flex items-center gap-2">
+				<span
+					class={`w-2 h-2 rounded-full ${status.online_probes > 0 ? 'bg-green-500 animate-pulse' : 'bg-neutral-600'}`}
+				></span>
+				{status.online_probes} {scannerWord(status.online_probes)} в сети,
+				получено {probes.length} из {status.online_probes} ответов
+			</div>
+		{/if}
 	</div>
-	{#if probes.length === 0}
+	{@render verification?.()}
+	{#if probes.length === 0 && status.status !== "verifying" && status.status !== "error"}
 		<div
 			class="rounded-lg border border-neutral-800 bg-neutral-900/20 p-8 text-center text-sm text-neutral-400"
 		>
-			{#if status.status === "done" || status.status === "error"}
+			{#if status.status === "done"}
 				Сканеры не ответили на запрос или недоступны.
 			{:else}
 				<LoaderCircle
@@ -69,7 +75,7 @@ const selectedRegionProbes = $derived(
 				/>Ожидание ответов от сканеров...
 			{/if}
 		</div>
-	{:else}
+	{:else if probes.length > 0}
 		<div
 			class="grid items-start gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)]"
 		>

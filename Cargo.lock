@@ -4717,7 +4717,7 @@ dependencies = [
 
 [[package]]
 name = "website"
-version = "1.5.7"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "deadpool",
@@ -4740,6 +4740,7 @@ dependencies = [
  "rumqttc 0.24.0",
  "semver",
  "serde",
+ "sha2",
  "sqlx",
  "toml",
  "url",

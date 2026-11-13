@@ -1,0 +1,75 @@
+.admin .panel {
+	border: 1px solid #303030;
+	border-radius: 0.75rem;
+	background: #171717;
+	padding: 1.5rem;
+}
+.admin .input {
+	display: block;
+	width: 100%;
+	border: 1px solid #404040;
+	border-radius: 0.5rem;
+	background: #0a0a0a;
+	padding: 0.65rem 0.8rem;
+	color: #f5f5f5;
+	outline: none;
+}
+.admin .input:focus {
+	border-color: #22d3ee;
+}
+.admin .field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	font-size: 0.875rem;
+	color: #aaa;
+}
+.admin .check {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	color: #d4d4d4;
+}
+.admin .check input {
+	accent-color: #22d3ee;
+}
+.admin .btn,
+.admin .btn-primary {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem;
+	border-radius: 0.5rem;
+	padding: 0.65rem 0.9rem;
+	font-size: 0.875rem;
+	cursor: pointer;
+}
+.admin .btn {
+	border: 1px solid #404040;
+	background: #262626;
+	color: #e5e5e5;
+}
+.admin .btn-primary {
+	border: 1px solid #0891b2;
+	background: #0891b2;
+	color: white;
+	font-weight: 600;
+}
+.admin button:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+.admin .link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	color: #67e8f9;
+	font-size: 0.8rem;
+	cursor: pointer;
+}
+.admin .link:hover {
+	text-decoration: underline;
+}
+.admin .link.remove-link {
+	color: #f87171;
+}
