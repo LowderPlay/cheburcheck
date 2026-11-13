@@ -35,6 +35,42 @@ impl<'r> FromRequest<'r> for ProbeCredentials<'r> {
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct ProbeCredits {
+    pub credits: i64,
+}
+
+#[derive(Responder)]
+pub struct ProbeCreditsResponse(
+    rocket::serde::json::Json<ProbeCredits>,
+    rocket::http::Header<'static>,
+);
+
+#[get("/credits")]
+pub async fn probe_credits(
+    credentials: ProbeCredentials<'_>,
+    pool: &rocket::State<PgPool>,
+) -> Result<ProbeCreditsResponse, Status> {
+    let key = credentials.0.ok_or(Status::Unauthorized)?;
+    let hash = format!("{:x}", Sha256::digest(key.as_bytes()));
+    let credits = sqlx::query_scalar::<_, i64>(
+        "SELECT credits FROM probe_api_keys WHERE key_hash = $1
+         AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
+    )
+    .bind(hash)
+    .fetch_optional(&**pool)
+    .await
+    .map_err(|error| {
+        log::warn!("api: failed to read probe API credits: {error}");
+        Status::ServiceUnavailable
+    })?
+    .ok_or(Status::Unauthorized)?;
+    Ok(ProbeCreditsResponse(
+        rocket::serde::json::Json(ProbeCredits { credits }),
+        rocket::http::Header::new("Cache-Control", "no-store"),
+    ))
+}
+
 pub struct ProbeAuth {
     client: reqwest::Client,
     secret: Option<String>,
@@ -226,6 +262,35 @@ mod tests {
         );
     }
 
+    #[rocket::async_test]
+    async fn credits_requires_bearer_credentials() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let client = Client::tracked(
+            rocket::build()
+                .manage(pool)
+                .mount("/", routes![probe_credits]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            client.get("/credits").dispatch().await.status(),
+            Status::Unauthorized
+        );
+        for header in ["Basic key", "Bearer", "Bearer a b"] {
+            assert_eq!(
+                client
+                    .get("/credits")
+                    .header(Header::new("Authorization", header))
+                    .dispatch()
+                    .await
+                    .status(),
+                Status::Unauthorized
+            );
+        }
+    }
+
     fn auth(endpoint: String) -> ProbeAuth {
         ProbeAuth {
             client: reqwest::Client::builder()
@@ -376,9 +441,61 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../migrations/20261114000000_probe_api_credits.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
         // Exercise the same hashing expression documented for key issuance.
         sqlx::query("INSERT INTO probe_api_keys(name, key_hash) VALUES ('test', encode(sha256(convert_to($1, 'UTF8')), 'hex'))")
             .bind("test-api-key").execute(&pool).await.unwrap();
+        let client = Client::tracked(
+            rocket::build()
+                .manage(pool.clone())
+                .mount("/", routes![probe_credits]),
+        )
+        .await
+        .unwrap();
+        for credits in [0_i64, 42, 0] {
+            sqlx::query("UPDATE probe_api_keys SET credits=$1 WHERE name='test'")
+                .bind(credits)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let response = client
+                .get("/credits")
+                .header(Header::new("Authorization", "Bearer test-api-key"))
+                .dispatch()
+                .await;
+            assert_eq!(response.status(), Status::Ok);
+            assert_eq!(
+                response.headers().get_one("Cache-Control"),
+                Some("no-store")
+            );
+            assert_eq!(
+                response
+                    .into_json::<rocket::serde::json::serde_json::Value>()
+                    .await
+                    .unwrap(),
+                rocket::serde::json::serde_json::json!({"credits": credits})
+            );
+            let stored: i64 =
+                sqlx::query_scalar("SELECT credits FROM probe_api_keys WHERE name='test'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(stored, credits);
+        }
+        assert_eq!(
+            client
+                .get("/credits")
+                .header(Header::new("Authorization", "Bearer wrong"))
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
         let mut auth = auth("http://127.0.0.1:1".into());
         auth.secret = None;
         for days in [None, Some(90)] {
@@ -396,7 +513,7 @@ mod tests {
             .into_inner();
             assert_eq!(issued.name, "monitoring");
             assert_eq!(issued.expires_at.is_some(), days.is_some());
-            assert!(issued.token.starts_with("probe_"));
+            assert!(issued.token.starts_with("cheburcheck_"));
             assert_eq!(
                 auth.authorize(&pool, ProbeCredentials(Some(&issued.token)), None)
                     .await,
@@ -502,6 +619,15 @@ mod tests {
                 .await,
             Err(Status::Unauthorized)
         );
+        assert_eq!(
+            client
+                .get("/credits")
+                .header(Header::new("Authorization", "Bearer test-api-key"))
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
         sqlx::query("UPDATE probe_api_keys SET expires_at = NULL, revoked_at = now()")
             .execute(&pool)
             .await
@@ -511,7 +637,25 @@ mod tests {
                 .await,
             Err(Status::Unauthorized)
         );
+        assert_eq!(
+            client
+                .get("/credits")
+                .header(Header::new("Authorization", "Bearer test-api-key"))
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
         pool.close().await;
+        assert_eq!(
+            client
+                .get("/credits")
+                .header(Header::new("Authorization", "Bearer test-api-key"))
+                .dispatch()
+                .await
+                .status(),
+            Status::ServiceUnavailable
+        );
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
             .execute(&admin)
             .await

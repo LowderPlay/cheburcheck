@@ -110,6 +110,7 @@ export type ProbeForm = Pick<
 >;
 
 export type ApiToken = {
+	credits: number;
 	id: string;
 	name: string;
 	created_at: string;

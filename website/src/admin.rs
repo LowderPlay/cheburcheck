@@ -81,6 +81,7 @@ pub struct IssuedProbeApiKey(pub Json<CreatedProbeApiKey>, Header<'static>);
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct ProbeApiKeyRow {
+    pub credits: i64,
     pub id: sqlx::types::Uuid,
     pub name: String,
     pub created_at: DateTime<Utc>,
@@ -97,7 +98,7 @@ pub async fn list_probe_api_keys(
     pool: &State<PgPool>,
 ) -> Result<ProbeApiKeyList, Status> {
     let rows = sqlx::query_as::<_, ProbeApiKeyRow>(
-        "SELECT id, name, created_at, expires_at, revoked_at
+        "SELECT id, name, created_at, expires_at, revoked_at, credits
          FROM probe_api_keys ORDER BY created_at DESC, id DESC",
     )
     .fetch_all(&**pool)
@@ -124,13 +125,49 @@ pub async fn revoke_probe_api_key(
     let id = sqlx::types::Uuid::parse_str(id).map_err(|_| Status::BadRequest)?;
     let row = sqlx::query_as::<_, ProbeApiKeyRow>(
         "UPDATE probe_api_keys SET revoked_at = COALESCE(revoked_at, now())
-         WHERE id = $1 RETURNING id, name, created_at, expires_at, revoked_at",
+         WHERE id = $1 RETURNING id, name, created_at, expires_at, revoked_at, credits",
     )
     .bind(id)
     .fetch_optional(&**pool)
     .await
     .map_err(|error| {
         log::error!("failed to revoke probe API key {id}: {error}");
+        Status::InternalServerError
+    })?
+    .ok_or(Status::NotFound)?;
+    Ok(RevokedProbeApiKey(
+        Json(row),
+        Header::new("Cache-Control", "no-store"),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ProbeApiCreditsInput {
+    pub credits: i64,
+}
+
+#[post("/probe-api-keys/<id>/credits", format = "json", data = "<input>")]
+pub async fn add_probe_api_credits(
+    _admin: Admin,
+    id: &str,
+    input: Json<ProbeApiCreditsInput>,
+    pool: &State<PgPool>,
+) -> Result<RevokedProbeApiKey, Status> {
+    let id = sqlx::types::Uuid::parse_str(id).map_err(|_| Status::BadRequest)?;
+    if input.credits <= 0 || input.credits > 9_007_199_254_740_991 {
+        return Err(Status::BadRequest);
+    }
+    let row = sqlx::query_as::<_, ProbeApiKeyRow>(
+        "UPDATE probe_api_keys SET credits = credits + $2
+         WHERE id = $1 AND credits <= 9007199254740991 - $2
+         RETURNING id, name, created_at, expires_at, revoked_at, credits",
+    )
+    .bind(id)
+    .bind(input.credits)
+    .fetch_optional(&**pool)
+    .await
+    .map_err(|error| {
+        log::error!("failed to add credits to probe API key {id}: {error}");
         Status::InternalServerError
     })?
     .ok_or(Status::NotFound)?;
@@ -513,7 +550,8 @@ mod tests {
                 routes![
                     issue_probe_api_key,
                     list_probe_api_keys,
-                    revoke_probe_api_key
+                    revoke_probe_api_key,
+                    add_probe_api_credits
                 ],
             ))
             .await
@@ -523,6 +561,19 @@ mod tests {
                 .post("/probe-api-keys")
                 .header(rocket::http::ContentType::JSON)
                 .body(r#"{"name":"test","expires_in_days":90}"#)
+                .dispatch()
+                .await
+                .status(),
+            Status::Unauthorized
+        );
+        assert_eq!(
+            client
+                .post(format!(
+                    "/probe-api-keys/{}/credits",
+                    sqlx::types::Uuid::new_v4()
+                ))
+                .header(rocket::http::ContentType::JSON)
+                .body(r#"{"credits":100}"#)
                 .dispatch()
                 .await
                 .status(),

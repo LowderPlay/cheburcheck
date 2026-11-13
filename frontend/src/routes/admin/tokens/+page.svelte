@@ -10,6 +10,7 @@ const admin = createAdminPage<ApiToken>("tokens", "/probe-api-keys", () => {
 	issued = null;
 });
 let name = $state("");
+let creditAmounts = $state<Record<string, number>>({});
 let days = $state(90);
 let noExpiry = $state(false);
 let issued = $state<IssuedApiToken | null>(null);
@@ -56,6 +57,26 @@ async function revokeToken(token: ApiToken) {
 		},
 	);
 }
+async function addCredits(token: ApiToken) {
+	const credits = creditAmounts[token.id];
+	if (!Number.isSafeInteger(credits) || credits <= 0 || admin.busy) return;
+	await admin.run(
+		`credits:${token.id}`,
+		async (request) => {
+			await admin.cancel();
+			return request<ApiToken>(`/probe-api-keys/${token.id}/credits`, "POST", {
+				credits,
+			});
+		},
+		(updated) => {
+			admin.updateRows((rows) =>
+				rows.map((row) => (row.id === updated.id ? updated : row)),
+			);
+			delete creditAmounts[token.id];
+			admin.notice = `Добавлено ${credits} кредитов для «${token.name}»`;
+		},
+	);
+}
 async function copyToken() {
 	if (issued) await admin.copy(issued.token, "Токен скопирован");
 }
@@ -88,12 +109,15 @@ async function copyToken() {
 						<th class="px-3">Выпущен</th>
 						<th class="px-3">Действует до</th>
 						<th class="px-3">Статус</th>
+						<th class="px-3">Кредиты</th>
 						<th class="pl-3">Действие</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each tokens as token (token.id)}
-						{@const expired = token.expires_at !== null && new Date(token.expires_at).getTime() <= now}
+						{@const expired =
+                            token.expires_at !== null &&
+                            new Date(token.expires_at).getTime() <= now}
 						<tr class="border-b border-neutral-800">
 							<td class="py-4 pr-3">
 								<div class="font-semibold">{token.name}</div>
@@ -105,12 +129,22 @@ async function copyToken() {
 								{formatDate(token.created_at)}
 							</td>
 							<td class="px-3 py-4 text-neutral-400">
-								{token.expires_at ? formatDate(token.expires_at) : "Бессрочно"}
+								{token.expires_at
+                                    ? formatDate(token.expires_at)
+                                    : "Бессрочно"}
 							</td>
 							<td class="px-3 py-4">
 								<span
-									class={token.revoked_at ? "text-red-300" : expired ? "text-amber-300" : "text-emerald-300"}
-									>{token.revoked_at ? "Отозван" : expired ? "Истёк" : "Активен"}</span
+									class={token.revoked_at
+                                        ? "text-red-300"
+                                        : expired
+                                          ? "text-amber-300"
+                                          : "text-emerald-300"}
+									>{token.revoked_at
+                                        ? "Отозван"
+                                        : expired
+                                          ? "Истёк"
+                                          : "Активен"}</span
 								>
 								{#if token.revoked_at}
 									<div class="mt-1 text-xs text-neutral-500">
@@ -118,14 +152,56 @@ async function copyToken() {
 									</div>
 								{/if}
 							</td>
+							<td class="px-3 py-4">
+								<div class="mb-2 font-semibold">
+									{token.credits.toLocaleString("ru-RU")}
+								</div>
+								<form
+									class="flex gap-2"
+									onsubmit={(event) => {
+                                        event.preventDefault();
+                                        void addCredits(token);
+                                    }}
+								>
+									<input
+										class="input w-28"
+										type="number"
+										min="1"
+										max={Number.MAX_SAFE_INTEGER -
+                                            token.credits}
+										step="1"
+										required
+										aria-label={`Добавить кредиты для ${token.name}`}
+										placeholder="Кредиты"
+										bind:value={creditAmounts[token.id]}
+										disabled={!!admin.busy ||
+                                            !!token.revoked_at ||
+                                            expired}
+									>
+									<button
+										class="btn"
+										type="submit"
+										disabled={!!admin.busy ||
+                                            !!token.revoked_at ||
+                                            expired}
+									>
+										Добавить
+									</button>
+								</form>
+							</td>
 							<td class="pl-3 py-4">
 								<button
 									type="button"
 									class="btn text-red-300"
-									disabled={!!admin.busy || token.revoked_at !== null}
+									disabled={!!admin.busy ||
+                                        token.revoked_at !== null}
 									onclick={() => void revokeToken(token)}
 								>
-									{admin.busy === token.id ? "Отзыв…" : token.revoked_at ? "Отозван" : "Отозвать"}
+									{admin.busy === token.id
+                                        ? "Отзыв…"
+                                        : token.revoked_at
+                                          ? "Отозван"
+                                          : "Отозвать"}
 								</button>
 							</td>
 						</tr>
@@ -142,7 +218,10 @@ async function copyToken() {
 		</p>
 		<form
 			class="space-y-4"
-			onsubmit={(event) => { event.preventDefault(); void issueToken(); }}
+			onsubmit={(event) => {
+                event.preventDefault();
+                void issueToken();
+            }}
 		>
 			<div class="grid gap-4 sm:grid-cols-2">
 				<label class="field"
@@ -198,13 +277,21 @@ async function copyToken() {
 					</button>
 				</div>
 				<p class="text-xs text-neutral-400">
-					{issued.expires_at ? `Действует до ${formatDate(issued.expires_at)}` : "Без срока действия"}
+					{issued.expires_at
+                        ? `Действует до ${formatDate(issued.expires_at)}`
+                        : "Без срока действия"}
 				</p>
 				<p class="text-xs text-neutral-400">
 					Передавайте в заголовке
 					<code>Authorization: Bearer &lt;токен&gt;</code>.
 				</p>
-				<button type="button" class="btn" onclick={() => { issued = null; }}>
+				<button
+					type="button"
+					class="btn"
+					onclick={() => {
+                        issued = null;
+                    }}
+				>
 					Скрыть токен
 				</button>
 			</div>

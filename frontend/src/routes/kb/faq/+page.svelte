@@ -13,10 +13,6 @@ import KbHeading from "$lib/components/kb/KbHeading.svelte";
 
 <KbArticle>
 	<h1>Ответы на частые вопросы</h1>
-	<p>
-		Для интеграций доступна <a href="/kb/api">документация API</a>: проверка
-		ресурсов, сетевые сканеры и авторизация.
-	</p>
 	<!-- biome-ignore format: link punctuation -->
 	<p>
 		На этой странице собраны ответы на часто задаваемые вопросы. Если вас
@@ -137,6 +133,14 @@ import KbHeading from "$lib/components/kb/KbHeading.svelte";
 			- раз в час.
 		</li>
 	</ul>
+
+	<KbHeading id="есть-ли-api" title="Есть ли у сайта API?">
+		Есть ли у сайта API?
+	</KbHeading>
+	<p>
+		Да, API позволяет проверять ресурсы и запускать сетевые сканеры.
+		Описание методов и авторизации — в <a href="/kb/api">документации API</a>.
+	</p>
 
 	<KbHeading
 		id="как-я-могу-помочь-в-развитии-сайта"

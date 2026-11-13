@@ -85,7 +85,7 @@ const streamExample = `event: started
 	<p>
 		<code>GET /check?target=&lt;цель&gt;</code>
 		принимает домен, IPv4, IPv6, подсеть в формате CIDR или ASN (например,
-		<code>AS13335</code>). Кодируйте значение параметра средствами HTTP-клиента.
+		<code>AS13335</code>).
 	</p>
 	<KbApiRequest
 		url="https://cheburcheck.ru/api/v1/check?target=example.com"
@@ -95,7 +95,8 @@ const streamExample = `event: started
 	<ul>
 		<li>
 			<code>id</code>
-			— контекст для сканеров и обратной связи; может быть <code>null</code>.
+			— контекст для сканеров и обратной связи; может быть
+			<code>null</code>.
 		</li>
 		<li>
 			<code>target</code>, <code>target_type</code> — нормализованная цель и её
@@ -127,17 +128,13 @@ const streamExample = `event: started
 	</ul>
 	<p>
 		Необязательные поля могут отсутствовать или содержать <code>null</code>.
-		Результат по спискам и результаты сетевых сканеров описывают разные виды
-		проверки; методика работы сканеров приведена в
+		Методика работы сканеров приведена в
 		<a href="/kb/probing">отдельной статье</a>.
 	</p>
 
 	<KbNote variant="info"
 		>Поле <code>id</code> — подписанный контекст проверки со сроком действия 24
-		часа. Передавайте его целиком; обычный UUID вместо него не подходит. Если
-		<code>id</code>
-		отсутствует или равен <code>null</code>, запустить сканеры по этому ответу
-		нельзя.</KbNote
+		часа. Передавайте его целиком.</KbNote
 	>
 
 	<KbHeading id="probe" title="GET /probe/&lt;id&gt; — сетевые сканеры"
@@ -146,8 +143,8 @@ const streamExample = `event: started
 	<p>
 		<code>GET /probe/&lt;id&gt;</code>
 		возвращает поток <code>text/event-stream</code>. Сканеры доступны для
-		доменов и отдельных IP-адресов. Для IP требуется включённая на сервере
-		трассировка. Подсети, ASN и специальные локальные адреса не поддерживаются.
+		доменов и отдельных IP-адресов. Подсети, ASN и специальные локальные адреса
+		не поддерживаются.
 	</p>
 	<p>
 		Сначала выполните <a href="#check">GET /check</a> и подставьте поле
@@ -156,18 +153,14 @@ const streamExample = `event: started
 		<code>Authorization: Bearer &lt;токен&gt;</code>
 		и читайте события SSE до события <code>done</code>.
 	</p>
+	<KbNote variant="info">
+		Лимиты API можно снять по запросу. Для этого напишите на
+		<a href="mailto:support@cheburcheck.ru">support@cheburcheck.ru</a>.
+	</KbNote>
 	<p>
 		Необязательный параметр <code>token</code> позволяет выбрать конкретный
 		сканер. Без выбора сканера используются доступные публичные сканеры.
 	</p>
-	<p>Пример запроса к одному сканеру без заголовка авторизации:</p>
-	<KbApiRequest
-		url="https://cheburcheck.ru/api/v1/probe/<id>?token=<токен сканера>"
-		responseType="text/event-stream"
-		responseBody={streamExample
-            .replaceAll('"online_probes":2', '"online_probes":1')
-            .replace('"response_count":2', '"response_count":1')}
-	/>
 	<p>Обрабатывайте именованные события:</p>
 	<ul>
 		<li>
@@ -212,9 +205,20 @@ const streamExample = `event: started
 	<p>
 		Событие <code>done</code> приходит и при истечении времени ожидания, поэтому
 		<code>response_count</code>
-		может быть меньше <code>online_probes</code>. Ноль результатов не доказывает
-		доступность ресурса. При разрыве соединения не считайте запрос завершённым
-		успешно.
+		может быть меньше <code>online_probes</code>.
+	</p>
+
+	<KbHeading id="credits" title="GET /credits — баланс кредитов"
+		>GET /credits — баланс кредитов</KbHeading
+	>
+	<p>
+		Передайте API-токен в заголовке
+		<code>Authorization: Bearer &lt;токен&gt;</code>. Ответ
+		<code>{JSON.stringify({ credits: 42 })}</code>
+		содержит текущий баланс этого токена. Запрос не расходует кредиты и работает
+		при нулевом балансе. Отсутствующий, неверный, просроченный или отозванный
+		токен возвращает
+		<code>401</code>.
 	</p>
 
 	<KbHeading id="other-methods" title="GET /status — статус сервиса"
@@ -303,9 +307,7 @@ const streamExample = `event: started
 		</li>
 	</ul>
 	<p>
-		По умолчанию проверка ограничена 30 запросами в минуту на IP, запросы к
-		сканерам — 5 запросами в минуту на IP, без накопления пачки запросов.
-		Настройки сервера могут отличаться. Лимиты действуют и для запросов с
-		API-токеном. Распределяйте запросы во времени.
+		Для API действуют ограничения частоты запросов. Чтобы снять их, напишите на
+		<a href="mailto:support@cheburcheck.ru">support@cheburcheck.ru</a>.
 	</p>
 </KbArticle>

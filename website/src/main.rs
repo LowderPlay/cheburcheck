@@ -92,6 +92,16 @@ async fn rocket() -> _ {
     let probe_limiter = std::sync::Arc::new(api::build_probe_rate_limiter(
         probe_rate_limit_rpm,
         burst_from_env("PROBE_RATE_LIMIT_BURST"),
+        std::env::var("PROBE_CREDIT_RATE_LIMIT_RPM")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(60),
+        std::env::var("PROBE_CREDIT_RATE_LIMIT_BURST")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(10),
     ));
     let probe_update_download_limiter =
         std::sync::Arc::new(api::build_probe_update_download_rate_limiter(
@@ -146,6 +156,7 @@ async fn rocket() -> _ {
             routes![
                 api::check,
                 api::probe_query,
+                api::probe_credits,
                 api::healthcheck,
                 api::feedback,
                 api::get_system_status,
@@ -162,6 +173,7 @@ async fn rocket() -> _ {
                 admin::issue_probe_api_key,
                 admin::list_probe_api_keys,
                 admin::revoke_probe_api_key,
+                admin::add_probe_api_credits,
                 admin::update,
                 admin::remove,
                 admin::reload,

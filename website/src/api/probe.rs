@@ -196,10 +196,6 @@ pub async fn probe_query(
     limiter: &State<Arc<ProbeRateLimiter>>,
     cache: &State<Arc<ProbeResponseCache>>,
 ) -> Result<EventStream![Event], ProbeError> {
-    if !limiter.check(&addr.ip) {
-        return Err(Status::TooManyRequests.into());
-    }
-
     let context = contexts.verify(id)?;
     let id = context.query_id;
     let query = context.target;
@@ -223,6 +219,7 @@ pub async fn probe_query(
 
     let (target_probe, eligible_probes, api_token_id) =
         authorize_probe_targets(pool, auth, credentials, turnstile_token, token).await?;
+    limiter.admit(pool, api_token_id, &addr.ip).await?;
     let active_probes = if target_probe.is_some() {
         eligible_probes
     } else {
