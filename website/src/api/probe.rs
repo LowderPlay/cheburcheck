@@ -1,5 +1,5 @@
 use super::probe_auth::{ProbeAuth, ProbeCredentials};
-use super::rate_limit::ProbeRateLimiter;
+use super::rate_limit::{ProbeRateLimitIdentity, ProbeRateLimiter};
 use crate::analytics::Analytics;
 use crate::check_context::CheckContext;
 use crate::mqtt::{MqttPublisher, PublishError};
@@ -219,7 +219,12 @@ pub async fn probe_query(
 
     let (target_probe, eligible_probes, api_token_id) =
         authorize_probe_targets(pool, auth, credentials, turnstile_token, token).await?;
-    limiter.admit(pool, api_token_id, &addr.ip).await?;
+    let rate_limit_identity = match api_token_id {
+        Some(id) => ProbeRateLimitIdentity::ApiKey(id),
+        None if token.is_some() => ProbeRateLimitIdentity::Scanner,
+        None => ProbeRateLimitIdentity::Turnstile,
+    };
+    limiter.admit(pool, rate_limit_identity, &addr.ip).await?;
     let active_probes = if target_probe.is_some() {
         eligible_probes
     } else {

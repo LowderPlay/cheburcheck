@@ -9,8 +9,16 @@ type KeyedRateLimiter = RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, Defa
 pub struct ApiRateLimiter(KeyedRateLimiter);
 
 pub struct ProbeRateLimiter {
-    default: KeyedRateLimiter,
+    scanner: KeyedRateLimiter,
+    free: RateLimiter<uuid::Uuid, DefaultKeyedStateStore<uuid::Uuid>, DefaultClock>,
+    turnstile: KeyedRateLimiter,
     credited: RateLimiter<uuid::Uuid, DefaultKeyedStateStore<uuid::Uuid>, DefaultClock>,
+}
+
+pub enum ProbeRateLimitIdentity {
+    Turnstile,
+    ApiKey(uuid::Uuid),
+    Scanner,
 }
 
 pub struct ProbeUpdateDownloadRateLimiter(KeyedRateLimiter);
@@ -27,15 +35,24 @@ impl ProbeRateLimiter {
     pub async fn admit(
         &self,
         pool: &sqlx::PgPool,
-        token_id: Option<uuid::Uuid>,
+        identity: ProbeRateLimitIdentity,
         ip: &IpAddr,
     ) -> Result<(), rocket::http::Status> {
         use rocket::http::Status;
-        let Some(token_id) = token_id else {
-            return self
-                .default
-                .check_key(ip)
-                .map_err(|_| Status::TooManyRequests);
+        let token_id = match identity {
+            ProbeRateLimitIdentity::Turnstile => {
+                return self
+                    .turnstile
+                    .check_key(ip)
+                    .map_err(|_| Status::TooManyRequests);
+            }
+            ProbeRateLimitIdentity::Scanner => {
+                return self
+                    .scanner
+                    .check_key(ip)
+                    .map_err(|_| Status::TooManyRequests);
+            }
+            ProbeRateLimitIdentity::ApiKey(id) => id,
         };
         let unavailable = |error| {
             log::warn!("api: failed to debit probe API credits: {error}");
@@ -61,8 +78,8 @@ impl ProbeRateLimiter {
                 .await
                 .map_err(unavailable)?;
         } else {
-            self.default
-                .check_key(ip)
+            self.free
+                .check_key(&token_id)
                 .map_err(|_| Status::TooManyRequests)?;
         }
         tx.commit().await.map_err(unavailable)?;
@@ -85,9 +102,13 @@ pub fn build_probe_rate_limiter(
     burst: u32,
     credit_per_minute: u32,
     credit_burst: u32,
+    turnstile_per_minute: u32,
+    turnstile_burst: u32,
 ) -> ProbeRateLimiter {
     ProbeRateLimiter {
-        default: build_limiter(per_minute, burst),
+        scanner: build_limiter(per_minute, burst),
+        free: RateLimiter::keyed(quota(per_minute, burst)),
+        turnstile: build_limiter(turnstile_per_minute, turnstile_burst),
         credited: RateLimiter::keyed(quota(credit_per_minute, credit_burst)),
     }
 }
@@ -115,17 +136,95 @@ mod tests {
     use std::time::Duration;
 
     #[rocket::async_test]
-    async fn default_admission_does_not_need_database() {
+    async fn scanner_admission_does_not_need_database() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://localhost/unused")
             .unwrap();
-        let limiter = build_probe_rate_limiter(5, 1, 60, 10);
+        let limiter = build_probe_rate_limiter(5, 1, 60, 10, 5, 1);
         let ip = "192.0.2.1".parse().unwrap();
-        assert_eq!(limiter.admit(&pool, None, &ip).await, Ok(()));
         assert_eq!(
-            limiter.admit(&pool, None, &ip).await,
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Scanner, &ip)
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Scanner, &ip)
+                .await,
             Err(rocket::http::Status::TooManyRequests)
         );
+    }
+
+    #[rocket::async_test]
+    async fn turnstile_has_an_independent_configurable_per_ip_limit() {
+        use rocket::http::Status;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let limiter = build_probe_rate_limiter(5, 1, 60, 10, 30, 2);
+        let first = "192.0.2.1".parse().unwrap();
+        let second = "192.0.2.2".parse().unwrap();
+        // Exhaust the scanner bucket before using the independently configured Turnstile burst.
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Scanner, &first)
+                .await,
+            Ok(())
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                limiter
+                    .admit(&pool, ProbeRateLimitIdentity::Turnstile, &first)
+                    .await,
+                Ok(())
+            );
+        }
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Turnstile, &first)
+                .await,
+            Err(Status::TooManyRequests)
+        );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Scanner, &first)
+                .await,
+            Err(Status::TooManyRequests)
+        );
+        // Another IP has its own Turnstile bucket, and consuming it leaves scanner requests available.
+        for _ in 0..2 {
+            assert_eq!(
+                limiter
+                    .admit(&pool, ProbeRateLimitIdentity::Turnstile, &second)
+                    .await,
+                Ok(())
+            );
+        }
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Turnstile, &second)
+                .await,
+            Err(Status::TooManyRequests)
+        );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Scanner, &second)
+                .await,
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn free_api_keys_have_independent_buckets_from_each_other_and_credited_requests() {
+        let limiter = build_probe_rate_limiter(5, 1, 60, 2, 5, 1);
+        let first = uuid::Uuid::new_v4();
+        let second = uuid::Uuid::new_v4();
+        assert!(limiter.free.check_key(&first).is_ok());
+        assert!(limiter.free.check_key(&first).is_err());
+        assert!(limiter.free.check_key(&second).is_ok());
+        assert!(limiter.credited.check_key(&first).is_ok());
+        assert!(limiter.free.check_key(&first).is_err());
     }
 
     #[rocket::async_test]
@@ -177,12 +276,54 @@ mod tests {
         };
         assert_eq!(balance().await, 0);
         let ip = "192.0.2.1".parse().unwrap();
-        let limiter = build_probe_rate_limiter(5, 1, 60, 2);
-        assert_eq!(limiter.admit(&pool, Some(id), &ip).await, Ok(()));
+        let limiter = build_probe_rate_limiter(5, 1, 60, 2, 5, 1);
+        // An exhausted Turnstile bucket does not block either free or credited API requests.
         assert_eq!(
-            limiter.admit(&pool, Some(id), &ip).await,
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Turnstile, &ip)
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::Turnstile, &ip)
+                .await,
             Err(Status::TooManyRequests)
         );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
+                .await,
+            Err(Status::TooManyRequests)
+        );
+        // Changing IP cannot bypass the free API key limit.
+        assert_eq!(
+            limiter
+                .admit(
+                    &pool,
+                    ProbeRateLimitIdentity::ApiKey(id),
+                    &"192.0.2.2".parse().unwrap()
+                )
+                .await,
+            Err(Status::TooManyRequests)
+        );
+        // Another free API key at the same IP has an independent allowance.
+        let other_id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO probe_api_keys(name, key_hash) VALUES ('other-free', repeat('b',64)) RETURNING id"
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::ApiKey(other_id), &ip)
+                .await,
+            Ok(())
+        );
+        assert_eq!(balance().await, 0);
         for credits in [0, -1, i64::MAX] {
             assert_eq!(
                 add_probe_api_credits(
@@ -207,25 +348,38 @@ mod tests {
         .0
         .into_inner();
         assert_eq!(topped.credits, 3);
-        // Credited requests bypass the exhausted IP bucket; their own limit still applies.
+        // Credited requests bypass the exhausted free key bucket; their own limit still applies.
         for _ in 0..2 {
-            assert_eq!(limiter.admit(&pool, Some(id), &ip).await, Ok(()));
+            assert_eq!(
+                limiter
+                    .admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
+                    .await,
+                Ok(())
+            );
         }
         assert_eq!(
             limiter
-                .admit(&pool, Some(id), &"192.0.2.2".parse().unwrap())
+                .admit(
+                    &pool,
+                    ProbeRateLimitIdentity::ApiKey(id),
+                    &"192.0.2.2".parse().unwrap()
+                )
                 .await,
             Err(Status::TooManyRequests)
         );
         assert_eq!(balance().await, 1);
         // Many concurrent calls compete for the final credit. Only one can spend it;
-        // one more can use the default bucket, and the rest must be rejected.
-        let limiter = std::sync::Arc::new(build_probe_rate_limiter(5, 1, 60, 100));
+        // one more can use the free key bucket, and the rest must be rejected.
+        let limiter = std::sync::Arc::new(build_probe_rate_limiter(5, 1, 60, 100, 5, 1));
         let mut calls = rocket::tokio::task::JoinSet::new();
         for _ in 0..20 {
             let limiter = limiter.clone();
             let pool = pool.clone();
-            calls.spawn(async move { limiter.admit(&pool, Some(id), &ip).await });
+            calls.spawn(async move {
+                limiter
+                    .admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
+                    .await
+            });
         }
         let mut results = Vec::new();
         while let Some(result) = calls.join_next().await {
@@ -256,7 +410,7 @@ mod tests {
                 Json(ProbeApiCreditsInput { credits: 10 }),
                 rocket::State::from(&pool)
             ),
-            limiter.admit(&pool, Some(id), &ip)
+            limiter.admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
         );
         assert!(added.is_ok());
         assert_eq!(spent, Ok(()));
@@ -267,7 +421,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            limiter.admit(&pool, Some(id), &ip).await,
+            limiter
+                .admit(&pool, ProbeRateLimitIdentity::ApiKey(id), &ip)
+                .await,
             Err(Status::Unauthorized)
         );
         assert_eq!(balance().await, 19);

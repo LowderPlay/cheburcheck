@@ -102,6 +102,12 @@ async fn rocket() -> _ {
             .and_then(|value| value.parse().ok())
             .filter(|value| *value > 0)
             .unwrap_or(10),
+        std::env::var("PROBE_TURNSTILE_RATE_LIMIT_RPM")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(5),
+        burst_from_env("PROBE_TURNSTILE_RATE_LIMIT_BURST"),
     ));
     let probe_update_download_limiter =
         std::sync::Arc::new(api::build_probe_update_download_rate_limiter(
