@@ -12,7 +12,7 @@ mod status;
 pub use check_endpoint::check;
 pub use feedback_endpoint::feedback;
 pub use nodes_endpoint::node_stats;
-pub use probe::{ProbeResponseCache, probe_query};
+pub use probe::{ProbeResponseCache, ProbeSelector, probe_query};
 pub use probe_auth::{ProbeAuth, probe_credits};
 pub use rate_limit::{
     ProbeUpdateDownloadRateLimiter, build_probe_rate_limiter,

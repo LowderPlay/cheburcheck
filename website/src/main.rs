@@ -154,6 +154,7 @@ async fn rocket() -> _ {
         .manage(probe_update_download_limiter)
         .manage(mqtt_publisher)
         .manage(probe_response_cache)
+        .manage(api::ProbeSelector::from_env())
         .manage(api::ProbeAuth::from_env())
         .manage(probe_update_proxy)
         .attach(AdHoc::try_on_ignite("Database Migrations", run_migrations))

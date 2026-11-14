@@ -25,6 +25,74 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const DEFAULT_PROBE_RESPONSE_CACHE_SECONDS: u64 = 3 * 60 * 60;
+const DEFAULT_PROBES_PER_QUERY: usize = 5;
+
+pub struct ProbeSelector {
+    limit: usize,
+    next: Mutex<usize>,
+}
+
+impl ProbeSelector {
+    pub fn from_env() -> Self {
+        let limit = std::env::var("PROBES_PER_QUERY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_PROBES_PER_QUERY);
+        Self::new(limit)
+    }
+
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            next: Mutex::new(0),
+        }
+    }
+
+    async fn select(&self, probes: Vec<String>, regions: &HashMap<String, String>) -> Vec<String> {
+        // Zero explicitly restores full coverage. Keep the cursor shared across
+        // requests so concurrent checks do not all choose the same recipients.
+        if probes.is_empty() || self.limit == 0 || probes.len() <= self.limit {
+            return probes;
+        }
+        let mut next = self.next.lock().await;
+        let start = *next % probes.len();
+        let region_keys: Vec<_> = probes
+            .iter()
+            .map(|id| {
+                regions
+                    .get(id)
+                    .map(|region| region.trim())
+                    .filter(|region| !region.is_empty())
+                    .map(str::to_lowercase)
+            })
+            .collect();
+        let mut counts = HashMap::new();
+        let mut selected_indices = HashSet::new();
+        let mut selected = Vec::with_capacity(self.limit);
+        for _ in 0..self.limit {
+            // Prefer the least represented region, breaking ties in rotating
+            // probe order. Missing regions share one bucket rather than each
+            // appearing to be a distinct location.
+            let index = (0..probes.len())
+                .map(|offset| (start + offset) % probes.len())
+                .filter(|index| !selected_indices.contains(index))
+                .min_by_key(|index| counts.get(&region_keys[*index]).copied().unwrap_or(0))
+                .unwrap();
+            selected_indices.insert(index);
+            *counts.entry(region_keys[index].clone()).or_insert(0) += 1;
+            selected.push(probes[index].clone());
+        }
+        // With regional preferences, advancing one position ensures every probe
+        // eventually leads a check, even when region sizes are very uneven.
+        let step = if region_keys.iter().any(Option::is_some) {
+            1
+        } else {
+            self.limit
+        };
+        *next = (start + step) % probes.len();
+        selected
+    }
+}
 
 #[derive(Debug, Responder)]
 pub struct ProbeError(rocket::response::status::Custom<rocket::serde::json::Json<Value>>);
@@ -195,6 +263,7 @@ pub async fn probe_query(
     mqtt: &State<MqttPublisher>,
     limiter: &State<Arc<ProbeRateLimiter>>,
     cache: &State<Arc<ProbeResponseCache>>,
+    selector: &State<ProbeSelector>,
 ) -> Result<EventStream![Event], ProbeError> {
     let context = contexts.verify(id)?;
     let id = context.query_id;
@@ -233,6 +302,22 @@ pub async fn probe_query(
     let cache_target = target.to_query().to_ascii_lowercase();
     let (cached, missing_probes, cache_generation) =
         cache.partition(&cache_target, &active_probes).await;
+    // Replay the whole eligible cache, spending the task budget only on misses.
+    let missing_probes = if target_probe.is_some() {
+        missing_probes
+    } else {
+        let regions = if selector.limit > 0 && missing_probes.len() > selector.limit {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT id::text, region FROM reporters WHERE hidden = FALSE AND region IS NOT NULL"
+            ).fetch_all(pool.inner()).await.map_err(|error| {
+                warn!("api: failed to load probe regions: {error}");
+                Status::InternalServerError
+            })?.into_iter().collect()
+        } else {
+            HashMap::new()
+        };
+        selector.select(missing_probes, &regions).await
+    };
     let expected_probes = missing_probes.iter().cloned().collect::<HashSet<_>>();
     let online_probes = cached.len() + expected_probes.len();
 
@@ -742,6 +827,141 @@ fn is_strict_majority(total: usize, count: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rocket::async_test]
+    async fn selection_rotates_fairly_across_requests_and_wraps() {
+        let selector = ProbeSelector::new(2);
+        let probes = vec!["1".into(), "2".into(), "3".into(), "4".into(), "5".into()];
+        let mut counts = HashMap::new();
+        for expected in [["1", "2"], ["3", "4"], ["5", "1"], ["2", "3"], ["4", "5"]] {
+            let selected = selector.select(probes.clone(), &HashMap::new()).await;
+            assert_eq!(selected, expected);
+            for probe in selected {
+                *counts.entry(probe).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(counts.len(), 5);
+        assert!(counts.values().all(|count| *count == 2));
+    }
+
+    #[rocket::async_test]
+    async fn selection_spreads_across_regions_and_rotates_within_them() {
+        let selector = ProbeSelector::new(3);
+        let probes: Vec<String> = (1..=7).map(|id| id.to_string()).collect();
+        let regions: HashMap<String, String> = [
+            ("1", "North"),
+            ("2", "North"),
+            ("3", "North"),
+            ("4", "South"),
+            ("5", "South"),
+            ("6", "East"),
+            ("7", "East"),
+        ]
+        .into_iter()
+        .map(|(id, region)| (id.into(), region.into()))
+        .collect();
+        let mut visited = HashSet::new();
+        for _ in 0..probes.len() {
+            let selected = selector.select(probes.clone(), &regions).await;
+            assert_eq!(selected.len(), 3);
+            let selected_regions: HashSet<_> = selected.iter().map(|id| &regions[id]).collect();
+            assert_eq!(selected_regions.len(), 3);
+            visited.extend(selected);
+        }
+        assert_eq!(visited.len(), probes.len());
+    }
+
+    #[rocket::async_test]
+    async fn selection_balances_extra_slots_and_groups_unknown_regions() {
+        let selector = ProbeSelector::new(5);
+        let probes: Vec<String> = (1..=9).map(|id| id.to_string()).collect();
+        let regions: HashMap<String, String> = [
+            ("1", " North "),
+            ("2", "north"),
+            ("3", "NORTH"),
+            ("4", "South"),
+            ("5", "South"),
+            ("6", "South"),
+            ("7", "  "),
+        ]
+        .into_iter()
+        .map(|(id, region)| (id.into(), region.into()))
+        .collect();
+        let selected = selector.select(probes, &regions).await;
+        assert_eq!(selected, ["1", "4", "7", "2", "5"]);
+        assert_eq!(selected.iter().collect::<HashSet<_>>().len(), 5);
+    }
+
+    #[rocket::async_test]
+    async fn selection_handles_empty_small_unlimited_and_changing_fleets() {
+        let selector = ProbeSelector::new(2);
+        assert!(selector.select(vec![], &HashMap::new()).await.is_empty());
+        assert_eq!(
+            selector.select(vec!["1".into()], &HashMap::new()).await,
+            ["1"]
+        );
+        assert_eq!(
+            selector
+                .select(vec!["1".into(), "2".into()], &HashMap::new())
+                .await,
+            ["1", "2"]
+        );
+        let probes = vec!["1".into(), "2".into(), "3".into(), "4".into(), "5".into()];
+        selector.select(probes.clone(), &HashMap::new()).await;
+        selector.select(probes.clone(), &HashMap::new()).await;
+        // The cursor may point past the end after probes go offline.
+        assert_eq!(
+            selector
+                .select(vec!["2".into(), "4".into(), "5".into()], &HashMap::new())
+                .await,
+            ["4", "5"]
+        );
+        assert_eq!(
+            ProbeSelector::new(0)
+                .select(probes.clone(), &HashMap::new())
+                .await,
+            probes
+        );
+    }
+
+    #[rocket::async_test]
+    async fn repeated_checks_accumulate_cached_coverage_with_a_bounded_task_budget() {
+        let cache = ProbeResponseCache::new(Duration::from_secs(60));
+        let selector = ProbeSelector::new(5);
+        let probes: Vec<String> = (1..=45).map(|id| id.to_string()).collect();
+
+        for round in 0..=9 {
+            let (cached, missing, generation) = cache.partition("example.org", &probes).await;
+            let selected = selector.select(missing, &HashMap::new()).await;
+            assert_eq!(cached.len(), round * 5);
+            assert_eq!(selected.len(), if round == 9 { 0 } else { 5 });
+            let cached_ids: HashSet<_> = cached.iter().map(|(id, _)| id).collect();
+            for probe_id in selected {
+                assert!(!cached_ids.contains(&probe_id));
+                cache
+                    .insert(
+                        "example.org",
+                        &probe_id,
+                        json!({"probe_id": probe_id, "job_id": "old", "cached": false}),
+                        None,
+                        123,
+                        generation,
+                    )
+                    .await;
+            }
+            for (_, entry) in cached {
+                let response = entry.replay_response("new");
+                assert_eq!(response["job_id"], "new");
+                assert_eq!(response["cached"], true);
+            }
+        }
+
+        // Cached results outside the eligible set must not leak into a check.
+        let (cached, missing, _) = cache.partition("example.org", &["7".into()]).await;
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].0, "7");
+        assert!(missing.is_empty());
+    }
 
     #[rocket::async_test]
     async fn scanner_token_does_not_fall_back_to_public_authorization() {
