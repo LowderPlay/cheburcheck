@@ -801,6 +801,8 @@ mod tests {
                         .arg(Some("Mozilla/5.0 'quoted' \\ agent $1")),
                 )
                 .await?;
+            // The test user's profile may acknowledge inserts before flushing.
+            client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let stored = analytics.query_by_id(id).await?.unwrap();
             assert_eq!(stored.query, target);
             assert_eq!(
@@ -818,6 +820,7 @@ mod tests {
                     .arg("1.2.3.4"),
                 )
                 .await?;
+            client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             assert!(
                 analytics
                     .query_by_id(legacy_id)
@@ -837,6 +840,7 @@ mod tests {
             analytics
                 .feedback(id, "other.org", "1.2.3.7", false)
                 .await?;
+            client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let total = client
                 .query_one::<Count>("SELECT count() AS count FROM human_reports")
                 .await?;
@@ -862,8 +866,7 @@ mod tests {
                         .arg(Some(id)),
                 )
                 .await?;
-            // Probe inserts acknowledge buffering, so flush explicitly before
-            // checking persistence in this disposable integration-test server.
+            // Flush before checking persistence regardless of the test user's profile.
             client.execute("SYSTEM FLUSH ASYNC INSERT QUEUE").await?;
             let probe = client
                 .query_one::<StoredProbe>(
